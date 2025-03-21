@@ -224,8 +224,7 @@ class Trainer(nn.Module):
             train_func = self.train_bilevel
         else:
             train_func = self.train_singlelevel
-        train_func(train_dataloaders, test_dataloaders, epochs, 
-            val_dataloaders, return_weight, **kwargs)
+        train_func(train_dataloaders, val_dataloaders, epochs, return_weight, **kwargs)
 
     def train_singlelevel(self, train_dataloaders, val_dataloaders, epochs, return_weight=False):
         r'''The training process of multi-task learning.
