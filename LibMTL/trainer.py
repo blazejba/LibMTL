@@ -1,4 +1,6 @@
 import torch, os, copy, torch_geometric
+import wandb
+
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
@@ -217,8 +219,7 @@ class Trainer(nn.Module):
         else:
             return losses
 
-    def train(self, train_dataloaders, test_dataloaders, epochs, 
-              val_dataloaders=None, return_weight=False, **kwargs):
+    def train(self, train_dataloaders, val_dataloaders, epochs, return_weight=False, **kwargs):
         if self.weighting in self.bilevel_methods:
             train_func = self.train_bilevel
         else:
@@ -226,8 +227,7 @@ class Trainer(nn.Module):
         train_func(train_dataloaders, test_dataloaders, epochs, 
             val_dataloaders, return_weight, **kwargs)
 
-    def train_singlelevel(self, train_dataloaders, test_dataloaders, epochs, 
-              val_dataloaders=None, return_weight=False):
+    def train_singlelevel(self, train_dataloaders, val_dataloaders, epochs, return_weight=False):
         r'''The training process of multi-task learning.
 
         Args:
@@ -287,26 +287,29 @@ class Trainer(nn.Module):
             self.meter.get_score()
             self.model.train_loss_buffer[:, epoch] = self.meter.loss_item
             self.meter.display(epoch=epoch, mode='train')
+            self.meter.log_wandb(epoch=epoch, mode='train')
             self.meter.reinit()
             
-            if val_dataloaders is not None:
-                self.meter.has_val = True
-                val_improvement = self.test(val_dataloaders, epoch, mode='val', return_improvement=True)
-            self.test(test_dataloaders, epoch, mode='test')
+            self.meter.has_val = True
+            val_improvement = self.test(val_dataloaders, epoch, mode='val', return_improvement=True)
+            self.test(val_dataloaders, epoch, mode='test', wandb=False)
+
             if self.scheduler is not None:
                 if self.scheduler_param['scheduler'] == 'reduce' and val_dataloaders is not None:
                     self.scheduler.step(val_improvement)
+                    wandb.log({'lr': self.scheduler.get_last_lr()[0]})
                 else:
                     self.scheduler.step()
             if self.save_path is not None and self.meter.best_result['epoch'] == epoch:
                 torch.save(self.model.state_dict(), os.path.join(self.save_path, 'best.pt'))
                 print('Save Model {} to {}'.format(epoch, os.path.join(self.save_path, 'best.pt')))
         self.meter.display_best_result()
+
         if return_weight:
             return self.batch_weight
 
 
-    def test(self, test_dataloaders, epoch=None, mode='test', return_improvement=False):
+    def test(self, test_dataloaders, epoch=None, mode='test', return_improvement=False, wandb=True, reinit=True):
         r'''The test process of multi-task learning.
 
         Args:
@@ -339,8 +342,11 @@ class Trainer(nn.Module):
         self.meter.record_time('end')
         self.meter.get_score()
         self.meter.display(epoch=epoch, mode=mode)
+        if wandb:
+            self.meter.log_wandb(epoch=epoch, mode=mode)
         improvement = self.meter.improvement
-        self.meter.reinit()
+        if reinit:
+            self.meter.reinit()
         if return_improvement:
             return improvement
 

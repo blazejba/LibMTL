@@ -1,0 +1,120 @@
+import wandb
+
+import torch
+import torch.nn as nn
+import torch_geometric.transforms as T
+from torch_geometric.data import DataLoader
+
+from LibMTL import Trainer
+from LibMTL.utils import set_random_seed, set_device
+from LibMTL.config import LibMTL_args, prepare_args
+
+from stats import get_meta_info
+from model import GPS, get_decoders
+from data import ADMEDataset, load_data
+from metadata import admet_metrics
+
+
+def parse_args(parser):
+    # model
+    parser.add_argument('--model-encoder-channels', default=64, type=int, help='model encoder channels')
+    parser.add_argument('--model-encoder-pe-dim', default=20, type=int, help='model encoder pe dim')
+    parser.add_argument('--model-encoder-num-layers', default=3, type=int, help='model encoder num layers')
+    parser.add_argument('--loss-reduction', default='sum', choices=['mean', 'sum'], type=str, help='loss reduction')
+    # training
+    parser.add_argument('--epochs', default=300, type=int, help='training epochs')
+    parser.add_argument('--lr-factor', default=0.9, type=float, help='learning rate factor')
+    parser.add_argument('--patience', default=5, type=int, help='patience')
+    parser.add_argument('--train-batch-size', default=512, type=int, help='batch size')
+    # misc
+    parser.add_argument('--wandb', action='store_true', help='use wandb')
+    return parser.parse_args()
+
+
+if __name__ == '__main__':
+    params = parse_args(LibMTL_args)
+    kwargs, optim_param, scheduler_param = prepare_args(params)
+    set_device(params.gpu_id); set_random_seed(params.seed)
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    scheduler_param = {
+        'scheduler': 'reduce',
+        'mode': 'max',
+        'factor': params.lr_factor, 
+        'patience': params.patience,
+        'min_lr': 0.00001
+    }
+    model_param = {
+        'channels': params.model_encoder_channels, 
+        'pe_dim': params.model_encoder_pe_dim, 
+        'num_layers': params.model_encoder_num_layers, 
+        'attn_type': 'multihead', 
+        'attn_kwargs': {'dropout': 0.5}
+    }
+
+    all_params = vars(params) | optim_param | scheduler_param | model_param
+    
+    wandb.init(name=f'{params.arch}_{params.weighting}',               
+               save_code=True,
+               config=all_params,
+               entity='BorgwardtLab',
+               project='libmtl_tdc',
+               mode='online' if params.wandb else 'disabled')
+
+    df_train, df_valid, df_test, task_dict = load_data(admet_metrics,
+                                                       loss_reduction=params.loss_reduction)
+    get_meta_info(df_train, df_valid, df_test)
+
+    label_cols = [c for c in df_train.columns if c != 'smi']
+
+    transform = T.AddRandomWalkPE(walk_length=params.model_encoder_pe_dim, attr_name='pe')
+
+    train_dataset = ADMEDataset(df_train, label_cols, transform=transform)
+    valid_dataset = ADMEDataset(df_valid, label_cols, transform=transform)
+    test_dataset  = ADMEDataset(df_test,  label_cols, transform=transform)
+
+    train_loader = DataLoader(train_dataset, batch_size=params.train_batch_size, 
+                                                              shuffle=True,  pin_memory=True)
+    valid_loader = DataLoader(valid_dataset, batch_size=params.train_batch_size*2, 
+                                                              shuffle=False, pin_memory=True)
+    test_loader  = DataLoader(test_dataset,  batch_size=params.train_batch_size*2, 
+                                                              shuffle=False, pin_memory=True)
+    
+    def encoder_class():
+        return GPS(**model_param)
+
+    decoders: nn.ModuleDict = get_decoders(task_dict, params.model_encoder_channels)
+
+    trainer = Trainer(task_dict=task_dict,
+                      weighting=params.weighting,
+                      architecture=params.arch, 
+                      encoder_class=encoder_class, 
+                      decoders=decoders, 
+                      rep_grad=params.rep_grad, 
+                      multi_input=False, 
+                      optim_param=optim_param, 
+                      scheduler_param=scheduler_param, 
+                      save_path=params.save_path,
+                      load_path=params.load_path,
+                      **kwargs)
+
+    trainer.train(train_loader, valid_loader, epochs=params.epochs)
+    best_epoch = trainer.meter.best_result['epoch']
+    trainer.test(test_loader, epoch=best_epoch, mode='test', reinit=False)
+    from metadata import leaderboard
+    import numpy as np
+
+    ranks = []
+    test_results = trainer.meter.results
+    for task_name in task_dict.keys():
+        leaderboard_scores = leaderboard[task_name]
+        scores = np.array(leaderboard_scores)
+        if task_dict[task_name]['weight'] == [1]:  # higher is better
+            rank = np.sum(scores > test_results[task_name]) + 1
+        else:  # lower is better
+            rank = np.sum(scores < test_results[task_name]) + 1
+        ranks.append(rank)    
+    wandb.log({'test/average_rank': sum(ranks) / len(ranks)})
+
+#wandb sweep --entity BorgwardtLab --project libmtl_tdc  sweep_config.yaml

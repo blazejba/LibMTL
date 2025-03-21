@@ -1,3 +1,5 @@
+import wandb
+
 import torch, time
 import torch.nn as nn
 import torch.nn.functional as F
@@ -84,7 +86,30 @@ class _PerformanceMeter(object):
             print('| ', end='')
         print('Time: {:.4f}'.format(self.end_time-self.beg_time), end='')
         print(' | ', end='') if mode!='test' else print()
-        
+
+    def log_wandb(self, epoch, mode):
+        log_dict = {}
+        for tn, task in enumerate(self.task_name):
+            log_dict[f"{mode}/{task}_loss"] = self.loss_item[tn]
+            for metric_name, metric_value in zip(self.task_dict[task]['metrics'], self.results[task]):
+                log_dict[f"{mode}/{task}_{metric_name}"] = metric_value
+
+        log_dict[f"{mode}/overall_loss"] = np.sum(self.loss_item)
+
+        total_score = {
+            'mae': [],
+            'roc-auc': [],
+            'pr-auc': [],
+            'spearman': [],
+        }
+        for task in self.task_name:
+            for metric_name, metric_value in zip(self.task_dict[task]['metrics'], self.results[task]):
+                total_score[metric_name].append(metric_value)
+        for metric_name, metric_value in total_score.items():
+            log_dict[f"{mode}/{metric_name}"] = np.mean(metric_value)
+
+        wandb.log(log_dict, step=epoch)
+
     def display_best_result(self):
         print('='*40)
         print('Best Result: Epoch {}, result {}'.format(self.best_result['epoch'], self.best_result['result']))
@@ -115,3 +140,4 @@ class _PerformanceMeter(object):
             self.metrics[task].reinit()
         self.loss_item = np.zeros(self.task_num)
         self.results = {task:[] for task in self.task_name}
+
