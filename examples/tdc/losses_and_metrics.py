@@ -127,7 +127,9 @@ class SparseAUPRC(AbsMetric):
 
     def update_fun(self, pred, gt):
         y_score = F.softmax(pred, dim=-1)[:, 1]
-        mask = ~torch.isnan(gt)
+        mask = ~torch.isnan(gt) & ~torch.isnan(y_score)
+        if torch.isnan(y_score).any():
+            print(f"NaNs in predictions: {torch.isnan(y_score).sum()}")
         if mask.sum() > 0:
             gt_valid = gt[mask].cpu().numpy()
             y_score_valid = y_score[mask].detach().cpu().numpy()

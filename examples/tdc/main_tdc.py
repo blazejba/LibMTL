@@ -117,4 +117,5 @@ if __name__ == '__main__':
         ranks.append(rank)    
     wandb.log({'test/average_rank': sum(ranks) / len(ranks)})
 
-#wandb sweep --entity BorgwardtLab --project libmtl_tdc  sweep_config.yaml
+#wandb sweep --entity BorgwardtLab --project libmtl_tdc  sweep_hparams.yaml
+#wandb sweep --entity BorgwardtLab --project libmtl_tdc  sweep_archs.yaml

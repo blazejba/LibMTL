@@ -1,0 +1,46 @@
+program: main_tdc.py
+command:
+  - python
+  - main_tdc.py
+  - --wandb
+  - --weighting
+  - "DB_MTL"
+  - --arch
+  - "HPS"
+  - --epochs
+  - "150"
+  - --train-batch-size
+  - "1028"
+  - ${args}
+method: grid
+
+metric:
+  name: test/average_rank
+  goal: minimize
+
+parameters:
+  weighting:
+    values: [
+      'EW',
+      'GradNorm',
+      'UW',
+      'MGDA',
+      'DWA', 
+      'GLS',
+      'PCGrad',
+      'GradDrop',
+      'IMTL',
+      'GradVac',
+      'CAGrad',
+      'Nash_MTL',
+      'RLW',
+      'MoCo',
+      'Aligned_MTL', 
+      'STCH',
+      'ExcessMTL',
+      'FairGrad',
+      'DB_MTL',
+      'FAMO',
+      'MoDo',
+      'SDMGrad',
+    ]

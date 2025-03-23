@@ -9,6 +9,12 @@ command:
   - "HPS"
   - --epochs
   - "150"
+  - --loss-reduction
+  - "sum"
+  - --lr
+  - "0.0002"
+  - --train-batch-size
+  - "1028"
   - ${args}
 method: grid
 
@@ -17,14 +23,9 @@ metric:
   goal: minimize
 
 parameters:
+  lr_factor:
+    values: [0.9, 0.95, 0.98]
   model-encoder-channels:
-    values: [32, 64, 128]
+    values: [64, 128, 256]
   model-encoder-num-layers:
-    values: [2, 3, 4]
-  loss-reduction:
-    values: ['sum', 'mean']
-    # lr-factor:
-      # values: [0.9, 0.8, 0.7, 0.6]
-  train-batch-size:
-    # values: [128, 512, 1028]
-    value: 1028
+    values: [3, 4, 5]
