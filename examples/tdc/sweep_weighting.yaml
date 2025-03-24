@@ -3,8 +3,6 @@ command:
   - python
   - main_tdc.py
   - --wandb
-  - --weighting
-  - "DB_MTL"
   - --arch
   - "HPS"
   - --epochs

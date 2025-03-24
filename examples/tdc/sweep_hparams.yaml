@@ -23,7 +23,7 @@ metric:
   goal: minimize
 
 parameters:
-  lr_factor:
+  lr-factor:
     values: [0.9, 0.95, 0.98]
   model-encoder-channels:
     values: [64, 128, 256]

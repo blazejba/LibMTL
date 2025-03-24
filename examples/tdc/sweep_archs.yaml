@@ -5,8 +5,6 @@ command:
   - --wandb
   - --weighting
   - "DB_MTL"
-  - --arch
-  - "HPS"
   - --epochs
   - "150"
   - --train-batch-size
@@ -21,23 +19,12 @@ metric:
 parameters:
   weighting:
     values: [
-      'EW',
-      'GradNorm',
-      'UW',
-      'MGDA',
-      'DWA', 
-      'GLS',
-      'PCGrad',
-      'GradDrop',
-      'IMTL',
-      'GradVac',
-      'CAGrad',
-      'Nash_MTL',
-      'RLW',
-      'MoCo',
-      'Aligned_MTL', 
-      'STCH',
-      'ExcessMTL',
-      'FairGrad',
-      'DB_MTL'
+      'HPS',
+      'CGC',
+      'Cross_stitch',
+      'DSelect_k',
+      'LTB',
+      'MMoE',
+      'MTAN',
+      'PLE'
     ]
