@@ -6,9 +6,19 @@ command:
   - --arch
   - "HPS"
   - --epochs
-  - "150"
+  - "120"
   - --train-batch-size
   - "1028"
+  - --lr-factor
+  - "0.9"
+  - --loss-reduction
+  - "sum"
+  - --lr
+  - "0.0002"
+  - --model-encoder-channels
+  - "128"
+  - --model-encoder-num-layers
+  - "4"
   - ${args}
 method: grid
 
