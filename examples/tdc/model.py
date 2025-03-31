@@ -7,6 +7,7 @@ from torch.nn import (ModuleDict,
                       Linear,
                       ModuleList,
                       ReLU,
+                      Dropout,
                       Sequential)
 
 from torch_geometric.nn import GINEConv, GPSConv, global_add_pool
@@ -59,28 +60,29 @@ class GPS(torch.nn.Module):
         return global_add_pool(x, data.batch)
 
 
-def get_decoders(task_dict: Dict[str, Any], channels: int) -> ModuleDict:
-    decoders = ModuleDict()
+def get_decoders(task_dict: Dict[str, Any], 
+                 channels: int,
+                 num_layers: int,
+                 dropout: float = 0.1) -> ModuleDict:
     
+    hidden_sizes = [channels // (2 ** i) for i in range(num_layers + 1)]
+    
+    shared_layers = []
+    for i in range(num_layers):
+        shared_layers.append(Linear(hidden_sizes[i], hidden_sizes[i + 1]))
+        shared_layers.append(ReLU())
+        shared_layers.append(Dropout(dropout))
+    
+    decoders = ModuleDict()
     for task, info in task_dict.items():
-        if isinstance(info['loss_fn'], SparseCELoss) or isinstance(info['loss_fn'], SparseSpearman):
-            decoders[task] = Sequential(
-                Linear(channels, channels // 2),
-                ReLU(),
-                Linear(channels // 2, channels // 4),
-                ReLU(),
-                Linear(channels // 4, 2)
-            )
-        elif isinstance(info['loss_fn'], SparseMSELoss):
-            decoders[task] = Sequential(
-                Linear(channels, channels // 2),
-                ReLU(),
-                Linear(channels // 2, channels // 4),
-                ReLU(),
-                Linear(channels // 4, 1)
-            )
+        if isinstance(info['loss_fn'], (SparseCELoss)):
+            output_size = info['n_outputs']
+        elif isinstance(info['loss_fn'], (SparseMSELoss, SparseSpearman)):
+            output_size = 1
         else:
             raise NotImplementedError(f"Loss function {info['loss_fn']} not implemented")
+            
+        decoders[task] = Sequential(*shared_layers, Linear(hidden_sizes[-1], output_size))
     
     return decoders
 

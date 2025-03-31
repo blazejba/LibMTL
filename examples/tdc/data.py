@@ -53,8 +53,10 @@ def load_data(datasets_to_use: Dict[str, str],
             df_valid = pd.merge(df_valid, valid, on='smi', how='outer')
             df_test  = pd.merge(df_test, test,   on='smi', how='outer')
         
+        n_classes = pd.unique(df_train[task_name_lower]).shape[0]
         task_dict[task_name_lower] = {
             'metrics'    : [metric],
+            'n_outputs'  : 1 if metric in ['mae', 'spearman'] else n_classes - 1,
             'metrics_fn' : metrics_to_metrics_fn[metric](),
             'loss_fn'    : metrics_to_loss_fn[metric](loss_reduction),
             'weight'     : [0] if metric in ['mae'] else [1]

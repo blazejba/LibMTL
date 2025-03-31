@@ -17,12 +17,17 @@ from metadata import admet_metrics
 
 def parse_args(parser):
     # model
+    ## encoder
     parser.add_argument('--model-encoder-channels', default=64, type=int, help='model encoder channels')
     parser.add_argument('--model-encoder-pe-dim', default=20, type=int, help='model encoder pe dim')
     parser.add_argument('--model-encoder-num-layers', default=3, type=int, help='model encoder num layers')
     parser.add_argument('--loss-reduction', default='sum', choices=['mean', 'sum'], type=str, help='loss reduction')
+    ## decoder
+    parser.add_argument('--model-decoder-channels', default=64, type=int, help='model decoder channels')
+    parser.add_argument('--model-decoder-num-layers', default=2, type=int, help='model decoder num layers')
+    parser.add_argument('--model-decoder-dropout', default=0.1, type=float, help='model decoder dropout')
     # training
-    parser.add_argument('--epochs', default=300, type=int, help='training epochs')
+    parser.add_argument('--epochs', default=10, type=int, help='training epochs')
     parser.add_argument('--lr-factor', default=0.9, type=float, help='learning rate factor')
     parser.add_argument('--patience', default=5, type=int, help='patience')
     parser.add_argument('--train-batch-size', default=512, type=int, help='batch size')
@@ -75,16 +80,28 @@ if __name__ == '__main__':
     test_dataset  = ADMEDataset(df_test,  label_cols, transform=transform)
 
     train_loader = DataLoader(train_dataset, batch_size=params.train_batch_size, 
-                                                              shuffle=True,  pin_memory=True)
+                              shuffle=True,  pin_memory=True)
     valid_loader = DataLoader(valid_dataset, batch_size=params.train_batch_size*2, 
-                                                              shuffle=False, pin_memory=True)
+                              shuffle=False, pin_memory=True)
     test_loader  = DataLoader(test_dataset,  batch_size=params.train_batch_size*2, 
-                                                              shuffle=False, pin_memory=True)
+                              shuffle=False, pin_memory=True)
     
+    if params.arch in ['MMoE', 'CGC', 'PLE']:
+        sample = train_dataset[0]
+        node_dim = sample.x.shape[1]
+    
+        kwargs.update({
+            'input_type': 'graph',
+            'node_dim': node_dim
+        })
+
     def encoder_class():
         return GPS(**model_param)
 
-    decoders: nn.ModuleDict = get_decoders(task_dict, params.model_encoder_channels)
+    decoders: nn.ModuleDict = get_decoders(task_dict=task_dict,
+                                           channels=params.model_encoder_channels, 
+                                           num_layers=params.model_decoder_num_layers, 
+                                           dropout=params.model_decoder_dropout)
 
     trainer = Trainer(task_dict=task_dict,
                       weighting=params.weighting,
