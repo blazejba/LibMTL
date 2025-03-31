@@ -1,0 +1,33 @@
+program: main_tdc.py
+command:
+  - python
+  - main_tdc.py
+  - --wandb
+  - --weighting
+  - "DB_MTL"
+  - --arch
+  - "HPS"
+  - --epochs
+  - "300"
+  - --loss-reduction
+  - "sum"
+  - --lr
+  - "0.0002"
+  - --train-batch-size
+  - "1028"
+  - ${args}
+method: grid
+
+metric:
+  name: test/average_rank
+  goal: minimize
+
+parameters:
+  lr-factor:
+    values: [0.9, 0.95, 0.98]
+  model-encoder-channels:
+    values: [64, 128, 256]
+  model-encoder-num-layers:
+    values: [3, 4, 5]
+  seed:
+    values: [0, 1, 2, 3]
