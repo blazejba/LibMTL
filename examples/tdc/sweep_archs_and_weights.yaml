@@ -3,12 +3,20 @@ command:
   - python
   - main_tdc.py
   - --wandb
-  - --weighting
-  - "DB_MTL"
   - --epochs
   - "150"
   - --train-batch-size
   - "1028"
+  - --lr-factor
+  - "0.9"
+  - --loss-reduction
+  - "sum"
+  - --lr
+  - "0.0002"
+  - --model-encoder-channels
+  - "128"
+  - --model-encoder-num-layers
+  - "4"
   - ${args}
 method: grid
 
@@ -27,4 +35,11 @@ parameters:
       'MMoE',
       'MTAN',
       'PLE'
+    ]
+  weighting:
+    values: [
+      'EW',
+      'FairGrad',
+      'DB_MTL',
+      'STCH',
     ]
