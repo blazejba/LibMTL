@@ -8,7 +8,7 @@ command:
   - --epochs
   - "200"
   - --train-batch-size
-  - "2048"
+  - "1024"
   - --lr-factor
   - "0.9"
   - --loss-reduction

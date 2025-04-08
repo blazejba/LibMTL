@@ -36,6 +36,10 @@ def parse_args(parser):
     return parser.parse_args()
 
 
+def minmax_normalize(history):
+    return (history - history.min(axis=0)) / (history.max(axis=0) - history.min(axis=0))
+
+
 if __name__ == '__main__':
     params = parse_args(LibMTL_args)
     kwargs, optim_param, scheduler_param = prepare_args(params)
@@ -119,6 +123,7 @@ if __name__ == '__main__':
     trainer.train(train_loader, valid_loader, epochs=params.epochs)
     best_epoch = trainer.meter.best_result['epoch']
     trainer.test(test_loader, epoch=best_epoch, mode='test', reinit=False)
+    
     from metadata import leaderboard
     import numpy as np
 
@@ -133,6 +138,61 @@ if __name__ == '__main__':
             rank = np.sum(scores < test_results[task_name]) + 1
         ranks.append(rank)    
     wandb.log({'test/average_rank': sum(ranks) / len(ranks)})
+
+    import time
+    time.sleep(45)
+
+    run_id = wandb.run.id
+    api = wandb.Api()
+    run_path = f"BorgwardtLab/libmtl_tdc/runs/{run_id}"
+    run = api.run(run_path)
+    history = run.history()
+
+    phase = 'val/'
+
+    spearman_cols = [col for col in history.columns if phase in col and '_spearman' in col]
+    mae_cols      = [col for col in history.columns if phase in col and '_mae' in col]
+    roc_auc_cols  = [col for col in history.columns if phase in col and '_roc-auc' in col]
+    pr_auc_cols   = [col for col in history.columns if phase in col and '_pr-auc' in col]
+
+    spearman_history = history[spearman_cols]
+    mae_history      = history[mae_cols]
+    roc_auc_history  = history[roc_auc_cols]
+    pr_auc_history   = history[pr_auc_cols]
+
+    spearman_history_normed = minmax_normalize(spearman_history)
+    mae_history_normed      = 1 - minmax_normalize(mae_history)
+    roc_auc_history_normed  = minmax_normalize(roc_auc_history)
+    pr_auc_history_normed   = minmax_normalize(pr_auc_history)
+
+    all_metrics = np.concatenate([mae_history_normed.values[:-1],
+                                  spearman_history_normed.values[:-1],
+                                  roc_auc_history_normed.values[:-1],
+                                  pr_auc_history_normed.values[:-1]], axis=1)
+
+    metric_product = np.prod(all_metrics, axis=1)
+    pps_idx = np.argmax(metric_product)
+    pps = metric_product[pps_idx]
+    print(f"all_metrics: {all_metrics}")
+    print(f"metric_product: {metric_product}")
+    print(f"pps_idx: {pps_idx}")
+    print(f"pps: {pps}")
+
+    trainer.test(test_loader, epoch=pps_idx, mode='test', reinit=False)
+    ranks = []
+    test_results = trainer.meter.results
+    for task_name in task_dict.keys():
+        leaderboard_scores = leaderboard[task_name]
+        scores = np.array(leaderboard_scores)
+        if task_dict[task_name]['weight'] == [1]: 
+            rank = np.sum(scores > test_results[task_name]) + 1
+        else:
+            rank = np.sum(scores < test_results[task_name]) + 1
+        ranks.append(rank)    
+    wandb.log({'test/average_rank_pps': sum(ranks) / len(ranks)})
+    wandb.log({'val/pps_max': pps})
+    for i, mp_i in enumerate(metric_product):
+        wandb.log({'val/metric_product': mp_i, 'epoch': i})
 
 #wandb sweep --entity BorgwardtLab --project libmtl_tdc  sweep_hparams.yaml
 #wandb sweep --entity BorgwardtLab --project libmtl_tdc  sweep_archs.yaml
