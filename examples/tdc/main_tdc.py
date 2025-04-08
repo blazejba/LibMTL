@@ -139,6 +139,8 @@ if __name__ == '__main__':
         ranks.append(rank)    
     wandb.log({'test/average_rank': sum(ranks) / len(ranks)})
 
+    trainer.meter.reinit()
+
     import time
     time.sleep(45)
 
