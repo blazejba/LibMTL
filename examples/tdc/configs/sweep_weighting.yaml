@@ -29,7 +29,7 @@ command:
 method: grid
 
 metric:
-  name: test/average_rank
+  name: test/average_rank_improvement
   goal: minimize
 
 parameters:
