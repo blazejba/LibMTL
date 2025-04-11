@@ -299,9 +299,12 @@ class Trainer(nn.Module):
                     wandb.log({'lr': self.scheduler.get_last_lr()[0]})
                 else:
                     self.scheduler.step()
-            if self.save_path is not None and self.meter.best_result['epoch'] == epoch:
-                torch.save(self.model.state_dict(), os.path.join(self.save_path, 'best.pt'))
-                print('Save Model {} to {}'.format(epoch, os.path.join(self.save_path, 'best.pt')))
+            # if self.save_path is not None and self.meter.best_result['epoch'] == epoch:
+            #     torch.save(self.model.state_dict(), os.path.join(self.save_path, 'best.pt'))
+            #     print('Save Model {} to {}'.format(epoch, os.path.join(self.save_path, 'best.pt')))
+            if self.save_path:
+                torch.save(self.model.state_dict(), os.path.join(self.save_path, f'epoch_{epoch}.pt'))
+                print('Save Model {} to {}'.format(epoch, os.path.join(self.save_path, f'epoch_{epoch}.pt')))
         self.meter.display_best_result()
 
         if return_weight:
