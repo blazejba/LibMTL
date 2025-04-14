@@ -6,7 +6,7 @@ command:
   - --arch
   - "HPS"
   - --epochs
-  - "200"
+  - "250"
   - --train-batch-size
   - "1024"
   - --lr-factor
@@ -29,7 +29,7 @@ command:
 method: grid
 
 metric:
-  name: test/average_rank_improvement
+  name: test/average_rank_independent
   goal: minimize
 
 parameters:
@@ -40,7 +40,7 @@ parameters:
       'UW',
       'MGDA',
       'DWA', 
-      'GLS',
+      # 'GLS',
       'PCGrad',
       # 'GradDrop',
       # 'IMTL',

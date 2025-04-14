@@ -16,100 +16,35 @@ from LibMTL.config import LibMTL_args, prepare_args
 from stats import get_meta_info
 from model import GPS, get_decoders
 from data import ADMEDataset, load_data
-from metadata import admet_metrics, leaderboard
+from metadata import admet_metrics
+from evaluator import CheckpointEvaluator
 
 
 def parse_args(parser):
     # model
     ## encoder
-    parser.add_argument('--model-encoder-channels', default=64, type=int, help='model encoder channels')
-    parser.add_argument('--model-encoder-pe-dim', default=20, type=int, help='model encoder pe dim')
-    parser.add_argument('--model-encoder-num-layers', default=3, type=int, help='model encoder num layers')
-    parser.add_argument('--loss-reduction', default='sum', choices=['mean', 'sum'], type=str, help='loss reduction')
+    parser.add_argument('--model-encoder-channels', default=64, type=int)
+    parser.add_argument('--model-encoder-pe-dim', default=20, type=int)
+    parser.add_argument('--model-encoder-num-layers', default=3, type=int)
+    parser.add_argument('--loss-reduction', default='sum', choices=['mean', 'sum'])
     ## decoder
-    parser.add_argument('--model-decoder-channels', default=64, type=int, help='model decoder channels')
-    parser.add_argument('--model-decoder-num-layers', default=2, type=int, help='model decoder num layers')
-    parser.add_argument('--model-decoder-dropout', default=0.1, type=float, help='model decoder dropout')
+    parser.add_argument('--model-decoder-channels', default=64, type=int)
+    parser.add_argument('--model-decoder-num-layers', default=2, type=int)
+    parser.add_argument('--model-decoder-dropout', default=0.1, type=float)
     # training
-    parser.add_argument('--epochs', default=10, type=int, help='training epochs')
-    parser.add_argument('--lr-factor', default=0.9, type=float, help='learning rate factor')
-    parser.add_argument('--patience', default=5, type=int, help='patience')
-    parser.add_argument('--train-batch-size', default=512, type=int, help='batch size')
+    parser.add_argument('--epochs', default=10, type=int)
+    parser.add_argument('--lr-factor', default=0.9, type=float)
+    parser.add_argument('--patience', default=5, type=int)
+    parser.add_argument('--train-batch-size', default=512, type=int)
+    # evaluation
+    parser.add_argument('--eval-methods', default=['improvement', 'pps', 'last', 'independent'], nargs='+', type=str)
     # misc
     parser.add_argument('--wandb', action='store_true', help='use wandb')
-    return parser.parse_args()
 
-
-def minmax_normalize(history):
-    return (history - history.min(axis=0)) / (history.max(axis=0) - history.min(axis=0))
-
-def test_with_ckpt_selection_method(trainer, n_epochs,ckpt_selection_method: str):
-    assert ckpt_selection_method in ['improvement', 'pps', 'last']
-
-    log_dict = {}
-
-    if ckpt_selection_method == 'improvement':
-        selected_epoch = trainer.meter.best_result['epoch']
-
-    elif ckpt_selection_method == 'pps':
-        time.sleep(45)
-
-        run_id = wandb.run.id
-        api = wandb.Api()
-        run_path = f"BorgwardtLab/libmtl_tdc/runs/{run_id}"
-        run = api.run(run_path)
-        history = run.history()
-
-        phase = 'val/'
-
-        spearman_cols = [col for col in history.columns if phase in col and '_spearman' in col]
-        mae_cols      = [col for col in history.columns if phase in col and '_mae' in col]
-        roc_auc_cols  = [col for col in history.columns if phase in col and '_roc-auc' in col]
-        pr_auc_cols   = [col for col in history.columns if phase in col and '_pr-auc' in col]
-
-        spearman_history = history[spearman_cols].dropna()
-        mae_history      = history[mae_cols].dropna()
-        roc_auc_history  = history[roc_auc_cols].dropna()
-        pr_auc_history   = history[pr_auc_cols].dropna()
-
-        spearman_history_normed = minmax_normalize(spearman_history)
-        mae_history_normed      = 1 - minmax_normalize(mae_history)
-        roc_auc_history_normed  = minmax_normalize(roc_auc_history)
-        pr_auc_history_normed   = minmax_normalize(pr_auc_history)
-
-        all_metrics = np.concatenate([mae_history_normed.values[:-1],
-                                    spearman_history_normed.values[:-1],
-                                    roc_auc_history_normed.values[:-1],
-                                    pr_auc_history_normed.values[:-1]], axis=1)
-
-        metric_product = np.prod(all_metrics, axis=1)
-        pps_idx = np.argmax(metric_product)
-        pps = metric_product[pps_idx]
-        selected_epoch = pps_idx
-        log_dict['val/pps'] = pps
-
-    elif ckpt_selection_method == 'last':
-        selected_epoch = n_epochs - 1
-
-    path = os.path.join(trainer.save_path, f'epoch_{selected_epoch}.pt')
-    trainer.model.load_state_dict(torch.load(path), strict=False)
-    trainer.test(test_loader, mode='test', reinit=False)
-
-    ranks = []
-    test_results = trainer.meter.results
-    for task_name in task_dict.keys():
-        leaderboard_scores = leaderboard[task_name]
-        scores = np.array(leaderboard_scores)
-        if task_dict[task_name]['weight'] == [1]:  # higher is better
-            rank = np.sum(scores > test_results[task_name]) + 1
-        else:  # lower is better
-            rank = np.sum(scores < test_results[task_name]) + 1
-        ranks.append(rank)    
-
-    log_dict[f'test/average_rank_{ckpt_selection_method}'] = sum(ranks) / len(ranks)
-    wandb.log(log_dict)
-
-    trainer.meter.reinit()
+    args = parser.parse_args()
+    assert len(args.eval_methods) > 0, 'No evaluation method provided'
+    print(args.eval_methods)
+    return args
 
 
 if __name__ == '__main__':
@@ -198,5 +133,7 @@ if __name__ == '__main__':
 
     trainer.train(train_loader, valid_loader, epochs=params.epochs)
 
-    for ckpt_selection_method in ['improvement', 'pps', 'last']:
-        selected_epoch = test_with_ckpt_selection_method(trainer, params.epochs, ckpt_selection_method)
+    evaluator = CheckpointEvaluator(trainer, test_loader, wandb.run.id, task_dict, params.save_path)
+    for ckpt_selection_method in params.eval_methods:
+        print(f'Evaluating with {ckpt_selection_method} method')
+        evaluator.evaluate_by_method(ckpt_selection_method, params.epochs)

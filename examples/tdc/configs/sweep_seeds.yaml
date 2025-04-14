@@ -3,18 +3,32 @@ command:
   - python
   - main_tdc.py
   - --wandb
-  - --weighting
-  - "DB_MTL"
+  - --save_path
+  - "results/"
   - --arch
   - "HPS"
+  - --weighting
+  - "DB_MTL"
   - --epochs
-  - "300"
+  - "200"
+  - --train-batch-size
+  - "1024"
+  - --lr-factor
+  - "0.9"
   - --loss-reduction
   - "sum"
   - --lr
   - "0.0002"
-  - --train-batch-size
-  - "1028"
+  - --model-encoder-channels
+  - "128"
+  - --model-encoder-num-layers
+  - "5"
+  - --model-decoder-channels
+  - "64"
+  - --model-decoder-num-layers
+  - "1"
+  - --model-decoder-dropout
+  - "0.3"
   - ${args}
 method: grid
 
@@ -23,11 +37,5 @@ metric:
   goal: minimize
 
 parameters:
-  lr-factor:
-    values: [0.9, 0.95, 0.98]
-  model-encoder-channels:
-    values: [64, 128, 256]
-  model-encoder-num-layers:
-    values: [3, 4, 5]
   seed:
     values: [0, 1, 2, 3]
