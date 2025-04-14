@@ -22,11 +22,12 @@ from evaluator import CheckpointEvaluator
 
 def parse_args(parser):
     # model
+    parser.add_argument('--loss-reduction', default='sum', choices=['mean', 'sum'])
     ## encoder
     parser.add_argument('--model-encoder-channels', default=64, type=int)
     parser.add_argument('--model-encoder-pe-dim', default=20, type=int)
     parser.add_argument('--model-encoder-num-layers', default=3, type=int)
-    parser.add_argument('--loss-reduction', default='sum', choices=['mean', 'sum'])
+    parser.add_argument('--model-encoder-dropout', default=0.5, type=float)
     ## decoder
     parser.add_argument('--model-decoder-channels', default=64, type=int)
     parser.add_argument('--model-decoder-num-layers', default=2, type=int)
@@ -66,7 +67,7 @@ if __name__ == '__main__':
         'pe_dim': params.model_encoder_pe_dim, 
         'num_layers': params.model_encoder_num_layers, 
         'attn_type': 'multihead', 
-        'attn_kwargs': {'dropout': 0.5}
+        'attn_kwargs': {'dropout': params.model_encoder_dropout}
     }
 
     all_params = vars(params) | optim_param | scheduler_param | model_param
@@ -100,15 +101,6 @@ if __name__ == '__main__':
                               shuffle=False, pin_memory=True)
     test_loader  = DataLoader(test_dataset,  batch_size=params.train_batch_size*2, 
                               shuffle=False, pin_memory=True)
-    
-    if params.arch in ['MMoE', 'CGC', 'PLE']:
-        sample = train_dataset[0]
-        node_dim = sample.x.shape[1]
-    
-        kwargs.update({
-            'input_type': 'graph',
-            'node_dim': node_dim
-        })
 
     def encoder_class():
         return GPS(**model_param)
