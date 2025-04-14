@@ -3,6 +3,8 @@ command:
   - python
   - main_tdc.py
   - --wandb
+  - --save_path
+  - "results/"
   - --arch
   - "HPS"
   - --epochs
