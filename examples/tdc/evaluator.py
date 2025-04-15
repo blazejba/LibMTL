@@ -64,6 +64,13 @@ class CheckpointEvaluator:
             ranks.append(rank)
         return sum(ranks) / len(ranks)
 
+    def get_metric_timeseries(self, metric: str):
+        return [
+            c for c in self.history.columns 
+            if 'val/' in c and f"_{metric}" in c and 
+            self.clean_task_name(c) in leaderboard.keys()
+        ]
+
     def evaluate_by_method(self, method: str, n_epochs: int = None):
         log_dict = {}
 
@@ -75,10 +82,10 @@ class CheckpointEvaluator:
 
         elif method == 'pps':
             time.sleep(45)
-            sp_cols  = [c for c in self.history.columns if 'val/' in c and '_spearman' in c]
-            mae_cols = [c for c in self.history.columns if 'val/' in c and '_mae' in c]
-            roc_cols = [c for c in self.history.columns if 'val/' in c and '_roc-auc' in c]
-            pr_cols  = [c for c in self.history.columns if 'val/' in c and '_pr-auc' in c]
+            sp_cols  = self.get_metric_timeseries('spearman')
+            mae_cols = self.get_metric_timeseries('mae')
+            roc_cols = self.get_metric_timeseries('roc-auc')
+            pr_cols  = self.get_metric_timeseries('pr-auc')
             sp_norm  = self.minmax_normalize(self.history[sp_cols].dropna())
             mae_norm = 1 - self.minmax_normalize(self.history[mae_cols].dropna())
             roc_norm = self.minmax_normalize(self.history[roc_cols].dropna())
@@ -101,10 +108,11 @@ class CheckpointEvaluator:
             log_dict['test/average_rank_last'] = avg_rank
 
         elif method == 'independent':
-            sp_cols  = [c for c in self.history.columns if 'val/' in c and '_spearman' in c]
-            mae_cols = [c for c in self.history.columns if 'val/' in c and '_mae' in c]
-            roc_cols = [c for c in self.history.columns if 'val/' in c and '_roc-auc' in c]
-            pr_cols  = [c for c in self.history.columns if 'val/' in c and '_pr-auc' in c]
+            time.sleep(45)
+            sp_cols  = self.get_metric_timeseries('spearman')
+            mae_cols = self.get_metric_timeseries('mae')
+            roc_cols = self.get_metric_timeseries('roc-auc')
+            pr_cols  = self.get_metric_timeseries('pr-auc')
             higher_better = sp_cols + roc_cols + pr_cols
             lower_better  = mae_cols
 

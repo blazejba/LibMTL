@@ -41,7 +41,18 @@ admet_metrics = {
     "ld50_zhu": "mae",
     "herg": "roc-auc",
     "ames": "roc-auc",
-    "dili": "roc-auc"
+    "dili": "roc-auc",
+}
+
+more_tasks = {
+    # extra datasets - tox
+    "skin_reaction": "roc-auc",
+    "carcinogens_lagunin": "roc-auc",
+    "clintox": "roc-auc",
+    # extra datasets - adme
+    "hydrationfreeenergy_freesolv": "mae",
+    "pampa_ncats":"roc-auc",
+    "cyp1a2_veith": "pr-auc",
 }
 
 # DO NOT RELY ON THIS!!!!!!! 

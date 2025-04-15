@@ -37,6 +37,7 @@ def parse_args(parser):
     parser.add_argument('--lr-factor', default=0.9, type=float)
     parser.add_argument('--patience', default=5, type=int)
     parser.add_argument('--train-batch-size', default=512, type=int)
+    parser.add_argument('--more-tasks', action='store_true')
     # evaluation
     parser.add_argument('--eval-methods', default=['improvement', 'pps', 'last', 'independent'], nargs='+', type=str)
     # misc
@@ -83,7 +84,13 @@ if __name__ == '__main__':
                project='libmtl_tdc',
                mode='online' if params.wandb else 'disabled')
 
-    df_train, df_valid, df_test, task_dict = load_data(admet_metrics,
+    if params.more_tasks:       
+        from metadata import more_tasks
+        datasets_to_use = {**admet_metrics, **more_tasks}
+    else:
+        datasets_to_use = admet_metrics
+
+    df_train, df_valid, df_test, task_dict = load_data(datasets_to_use,
                                                        loss_reduction=params.loss_reduction)
     get_meta_info(df_train, df_valid, df_test)
 

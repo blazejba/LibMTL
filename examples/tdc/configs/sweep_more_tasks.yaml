@@ -7,8 +7,6 @@ command:
   - "results/"
   - --arch
   - "HPS"
-  - --weighting
-  - "DB_MTL"
   - --epochs
   - "200"
   - --train-batch-size
@@ -37,5 +35,7 @@ metric:
   goal: minimize
 
 parameters:
+  weighting:
+    values: ["DB_MTL", "FairGrad", "EW"]
   seed:
-    values: [0, 1, 2, 3]
+    values: [0, 1, 2]
