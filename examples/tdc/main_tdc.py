@@ -19,6 +19,13 @@ from data import ADMEDataset, load_data
 from metadata import admet_metrics
 from evaluator import CheckpointEvaluator
 
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ('yes', 'true', 't', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', '0'):
+        return False
 
 def parse_args(parser):
     # model
@@ -37,7 +44,7 @@ def parse_args(parser):
     parser.add_argument('--lr-factor', default=0.9, type=float)
     parser.add_argument('--patience', default=5, type=int)
     parser.add_argument('--train-batch-size', default=512, type=int)
-    parser.add_argument('--more-tasks', action='store_true')
+    parser.add_argument('--more-tasks', default=False, type=str2bool)
     # evaluation
     parser.add_argument('--eval-methods', default=['improvement', 'pps', 'last', 'independent'], nargs='+', type=str)
     # misc

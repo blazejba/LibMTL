@@ -8,7 +8,7 @@ command:
   - --arch
   - "HPS"
   - --epochs
-  - "200"
+  - "250"
   - --train-batch-size
   - "1024"
   - --lr-factor
@@ -35,6 +35,8 @@ metric:
   goal: minimize
 
 parameters:
+  more_tasks:
+    values: [True, False]
   weighting:
     values: ["DB_MTL", "FairGrad", "EW"]
   seed:
