@@ -35,7 +35,7 @@ metric:
   goal: minimize
 
 parameters:
-  more_tasks:
+  more-tasks:
     values: [True, False]
   weighting:
     values: ["DB_MTL", "FairGrad", "EW"]
