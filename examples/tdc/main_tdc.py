@@ -100,7 +100,6 @@ if __name__ == '__main__':
     df_train, df_valid, df_test, task_dict = load_data(datasets_to_use,
                                                        loss_reduction=params.loss_reduction,
                                                        smi_leakage_method=params.smi_leakage_method)
-    exit()
     get_meta_info(df_train, df_valid, df_test)
 
     label_cols = [c for c in df_train.columns if c != 'smi']
