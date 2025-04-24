@@ -1,7 +1,5 @@
 import os
-import time
 import wandb
-import numpy as np
 from datetime import datetime
 
 import torch
@@ -45,6 +43,7 @@ def parse_args(parser):
     parser.add_argument('--patience', default=5, type=int)
     parser.add_argument('--train-batch-size', default=512, type=int)
     parser.add_argument('--more-tasks', default=False, type=str2bool)
+    parser.add_argument('--smi-leakage-method', default='none', choices=['none', 'test+valid', 'test'])
     # evaluation
     parser.add_argument('--eval-methods', default=['improvement', 'pps', 'last', 'independent'], nargs='+', type=str)
     # misc
@@ -80,9 +79,10 @@ if __name__ == '__main__':
 
     all_params = vars(params) | optim_param | scheduler_param | model_param
     
-    date_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-    params.save_path = os.path.join(params.save_path, f'{params.arch}_{params.weighting}_{date_str}')
-    os.makedirs(params.save_path, exist_ok=True)
+    if params.save_path is not None:
+        date_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+        params.save_path = os.path.join(params.save_path, f'{params.arch}_{params.weighting}_{date_str}')
+        os.makedirs(params.save_path, exist_ok=True)
     
     wandb.init(name=f'{params.arch}_{params.weighting}',               
                save_code=True,
@@ -98,7 +98,9 @@ if __name__ == '__main__':
         datasets_to_use = admet_metrics
 
     df_train, df_valid, df_test, task_dict = load_data(datasets_to_use,
-                                                       loss_reduction=params.loss_reduction)
+                                                       loss_reduction=params.loss_reduction,
+                                                       smi_leakage_method=params.smi_leakage_method)
+    exit()
     get_meta_info(df_train, df_valid, df_test)
 
     label_cols = [c for c in df_train.columns if c != 'smi']
@@ -140,6 +142,14 @@ if __name__ == '__main__':
     trainer.train(train_loader, valid_loader, epochs=params.epochs)
 
     evaluator = CheckpointEvaluator(trainer, test_loader, wandb.run.id, task_dict, params.save_path)
-    for ckpt_selection_method in params.eval_methods:
-        print(f'Evaluating with {ckpt_selection_method} method')
-        evaluator.evaluate_by_method(ckpt_selection_method, params.epochs)
+
+    if params.save_path is not None:
+        for ckpt_selection_method in params.eval_methods:
+            print(f'Evaluating with {ckpt_selection_method} method')
+            evaluator.evaluate_by_method(ckpt_selection_method, params.epochs)
+    else:
+        trainer.test(test_loader, mode='test', reinit=False)
+        results = trainer.meter.results.copy()
+        wandb.log(results)
+
+

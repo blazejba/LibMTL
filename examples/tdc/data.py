@@ -16,6 +16,7 @@ from metadata import metrics_to_metrics_fn, metrics_to_loss_fn
 
 
 def load_data(datasets_to_use: Dict[str, str],
+              smi_leakage_method: str = 'none',
               loss_reduction: str = 'mean') -> tuple[
                                                         pd.DataFrame, 
                                                         pd.DataFrame, 
@@ -61,6 +62,23 @@ def load_data(datasets_to_use: Dict[str, str],
             'loss_fn'    : metrics_to_loss_fn[metric](loss_reduction),
             'weight'     : [0] if metric in ['mae'] else [1]
         }
+
+    if smi_leakage_method == 'test+valid':
+        leakage_smiles = set(df_valid['smi']).union(set(df_test['smi']))
+    elif smi_leakage_method == 'test':
+        leakage_smiles = set(df_test['smi'])
+    else:
+        return df_train, df_valid, df_test, task_dict
+
+    initial_counts = {task: df_train[task].notna().sum() for task in task_dict.keys()}
+    df_train = df_train[~df_train['smi'].isin(leakage_smiles)].reset_index(drop=True)
+    filtered_counts = {task: df_train[task].notna().sum() for task in task_dict.keys()}
+
+    print("Training data reduced due to molecule overlap with validation/test splits:")
+    for task in task_dict.keys():
+        lost = initial_counts[task] - filtered_counts[task]
+        rel  = (lost / initial_counts[task] * 100) if initial_counts[task] else 0.0
+        print(f"  {task}: {lost} ({rel:.2f}%)")
 
     return df_train, df_valid, df_test, task_dict
 

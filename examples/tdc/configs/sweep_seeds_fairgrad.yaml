@@ -7,12 +7,12 @@ command:
   - "results/"
   - --weighting
   - "FairGrad"
-  - --FairGrad-alpha
+  - --FairGrad_alpha
   - "0.5"
   - --arch
   - "HPS"
   - --epochs
-  - "500"
+  - "250"
   - --train-batch-size
   - "1024"
   - --lr-factor
@@ -43,5 +43,9 @@ metric:
   goal: minimize
 
 parameters:
+  smi-leakage-method:
+    values: ['none', 'test+valid', 'test']
+  more-tasks:
+    values: [True, False]
   seed:
     values: [0, 1, 2]
