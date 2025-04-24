@@ -142,4 +142,3 @@ class CheckpointEvaluator:
             raise ValueError(f"Unknown method: {method}")
 
         wandb.log(log_dict)
-        self.trainer.meter.reinit()
