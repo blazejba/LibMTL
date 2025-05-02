@@ -7,12 +7,10 @@ command:
   - "results/"
   - --weighting
   - "FairGrad"
-  - --FairGrad_alpha
-  - "0.5"
   - --arch
   - "HPS"
   - --epochs
-  - "250"
+  - "300"
   - --train-batch-size
   - "1024"
   - --lr-factor
@@ -35,6 +33,10 @@ command:
   - "1"
   - --model-decoder-dropout
   - "0.3"
+  - --smi-leakage-method
+  - "none"
+  - --more-tasks
+  - "False"
   - ${args}
 method: grid
 
@@ -43,9 +45,7 @@ metric:
   goal: minimize
 
 parameters:
-  smi-leakage-method:
-    values: ['none', 'test+valid', 'test']
-  more-tasks:
-    values: [True, False]
+  FairGrad_alpha:
+    values: [0.1, 0.25, 0.5, 0.75, 1.0]
   seed:
     values: [0, 1, 2]
