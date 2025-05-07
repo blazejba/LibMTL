@@ -1,3 +1,4 @@
+import copy
 from typing import Any, Dict
 
 import torch
@@ -61,11 +62,12 @@ class GPS(torch.nn.Module):
 
 
 def get_decoders(task_dict: Dict[str, Any], 
-                 channels: int,
+                 in_dim: int,
+                 hidden_dim: int,
                  num_layers: int,
                  dropout: float = 0.1) -> ModuleDict:
     
-    hidden_sizes = [channels // (2 ** i) for i in range(num_layers + 1)]
+    hidden_sizes = [in_dim] + [hidden_dim] * num_layers
     
     shared_layers = []
     for i in range(num_layers):
@@ -82,9 +84,43 @@ def get_decoders(task_dict: Dict[str, Any],
         else:
             raise NotImplementedError(f"Loss function {info['loss_fn']} not implemented")
             
-        decoders[task] = Sequential(*shared_layers, Linear(hidden_sizes[-1], output_size))
+        decoders[task] = Sequential(
+            *copy.deepcopy(shared_layers), Linear(hidden_sizes[-1], output_size)
+        )
     
     return decoders
+
+def freeze_encoder(model):
+    dec_param_ids = set()
+    if hasattr(model, "decoders"):
+        for head in model.decoders.values():
+            for p in head.parameters():
+                dec_param_ids.add(id(p))
+
+    for name, module in model.named_children():
+        if name == "decoders":
+            continue
+
+        for p in module.parameters():
+            if id(p) not in dec_param_ids:
+                p.requires_grad = False
+
+        module.eval()
+
+        orig_fwd = module.forward
+        def fwd_no_grad(*args, _orig_fwd=orig_fwd, **kw):
+            with torch.no_grad():
+                return _orig_fwd(*args, **kw)
+        module.forward = fwd_no_grad
+
+    return model
+
+def copy_encoder_weights(src_model, tgt_model):
+    src_state = src_model.state_dict()
+    filtered_state = {k: v for k, v in src_state.items()
+                      if not k.startswith("decoders.")}
+    tgt_model.load_state_dict(filtered_state, strict=False)
+    return tgt_model
 
 
 if __name__ == '__main__':
