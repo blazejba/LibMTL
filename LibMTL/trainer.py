@@ -129,26 +129,45 @@ class Trainer(nn.Module):
             print('Load Model from - {}'.format(self.load_path))
         count_parameters(self.model)
         
-    def _prepare_optimizer(self, optim_param, scheduler_param):
+    def _prepare_optimizer(self, optim_param: dict, scheduler_param: dict):
         optim_dict = {
-                'sgd': torch.optim.SGD,
-                'adam': torch.optim.Adam,
-                'adagrad': torch.optim.Adagrad,
-                'rmsprop': torch.optim.RMSprop,
-            }
+            'sgd':  torch.optim.SGD,
+            'adam': torch.optim.Adam,
+            'adagrad': torch.optim.Adagrad,
+            'rmsprop': torch.optim.RMSprop,
+        }
         scheduler_dict = {
-                'exp': torch.optim.lr_scheduler.ExponentialLR,
-                'step': torch.optim.lr_scheduler.StepLR,
-                'cos': torch.optim.lr_scheduler.CosineAnnealingLR,
-                'reduce': torch.optim.lr_scheduler.ReduceLROnPlateau,
-            }
+            'exp':  torch.optim.lr_scheduler.ExponentialLR,
+            'step': torch.optim.lr_scheduler.StepLR,
+            'cos':  torch.optim.lr_scheduler.CosineAnnealingLR,
+            'reduce': torch.optim.lr_scheduler.ReduceLROnPlateau,
+        }
+
         optim_arg = {k: v for k, v in optim_param.items() if k != 'optim'}
         self.optimizer = optim_dict[optim_param['optim']](self.model.parameters(), **optim_arg)
+
+        self.scheduler = None
         if scheduler_param is not None:
-            scheduler_arg = {k: v for k, v in scheduler_param.items() if k != 'scheduler'}
-            self.scheduler = scheduler_dict[scheduler_param['scheduler']](self.optimizer, **scheduler_arg)
-        else:
-            self.scheduler = None
+            warmup_steps   = scheduler_param.pop('warmup_steps', 0)
+            warmup_factor  = scheduler_param.pop('warmup_start_factor', .1)
+            scheduler_name = scheduler_param.pop('scheduler')
+            scheduler_arg  = scheduler_param
+
+            main_sched = scheduler_dict[scheduler_name](self.optimizer, **scheduler_arg)
+
+            if warmup_steps > 0:
+                warmup_sched = torch.optim.lr_scheduler.LinearLR(
+                    self.optimizer,
+                    start_factor=warmup_factor,
+                    total_iters=warmup_steps
+                )
+                self.scheduler = torch.optim.lr_scheduler.SequentialLR(
+                    self.optimizer,
+                    schedulers=[warmup_sched, main_sched],
+                    milestones=[warmup_steps]
+                )
+            else:
+                self.scheduler = main_sched
 
     def _process_data(self, loader):
         try:
