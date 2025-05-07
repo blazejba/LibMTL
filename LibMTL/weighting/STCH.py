@@ -48,8 +48,8 @@ class STCH(AbsWeighting):
             losses = torch.log(losses/self.nadir_vector+1e-20)
             max_term = torch.max(losses.data).detach()
             reg_losses = losses - max_term
-           
-            loss = mu * torch.log(torch.sum(torch.exp(reg_losses/mu))) * self.task_num
+
+            loss = mu * torch.logsumexp(reg_losses/mu) * self.task_num
             loss.backward()
             
             return  batch_weight 
