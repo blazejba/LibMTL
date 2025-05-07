@@ -1,6 +1,7 @@
 import os
 import wandb
 from datetime import datetime
+from functools import partial
 
 import torch
 import torch.nn as nn
@@ -12,10 +13,11 @@ from LibMTL.utils import set_random_seed, set_device
 from LibMTL.config import LibMTL_args, prepare_args
 
 from stats import get_meta_info
-from model import GPS, get_decoders
-from data import ADMEDataset, load_data
 from metadata import admet_metrics
+from model import GPS, get_decoders
 from evaluator import CheckpointEvaluator
+from data import SparseMultitaskDataset, load_data, remove_overlap
+
 
 def str2bool(v):
     if isinstance(v, bool):
@@ -97,31 +99,34 @@ if __name__ == '__main__':
     else:
         datasets_to_use = admet_metrics
 
-    df_train, df_valid, df_test, task_dict = load_data(datasets_to_use,
-                                                       loss_reduction=params.loss_reduction,
-                                                       smi_leakage_method=params.smi_leakage_method)
+    df_train, df_valid, df_test, task_dict = load_data(datasets_to_use, params.loss_reduction)
+    if params.smi_leakage_method != 'none':
+        df_train = remove_overlap(df_train, df_test)
+        if params.smi_leakage_method == 'test+valid':
+            df_train = remove_overlap(df_train, df_valid)
+
     get_meta_info(df_train, df_valid, df_test)
 
     label_cols = [c for c in df_train.columns if c != 'smi']
 
     transform = T.AddRandomWalkPE(walk_length=params.model_encoder_pe_dim, attr_name='pe')
 
-    train_dataset = ADMEDataset(df_train, label_cols, transform=transform)
-    valid_dataset = ADMEDataset(df_valid, label_cols, transform=transform)
-    test_dataset  = ADMEDataset(df_test,  label_cols, transform=transform)
+    partial_dataset = partial(SparseMultitaskDataset, label_cols=label_cols, transform=transform)
+    train_dataset = partial_dataset(df_train)
+    valid_dataset = partial_dataset(df_valid)
+    test_dataset  = partial_dataset(df_test)
 
-    train_loader = DataLoader(train_dataset, batch_size=params.train_batch_size, 
-                              shuffle=True,  pin_memory=True)
-    valid_loader = DataLoader(valid_dataset, batch_size=params.train_batch_size*2, 
-                              shuffle=False, pin_memory=True)
-    test_loader  = DataLoader(test_dataset,  batch_size=params.train_batch_size*2, 
-                              shuffle=False, pin_memory=True)
+    partial_loader = partial(DataLoader, pin_memory=True)
+    train_loader = partial_loader(train_dataset, batch_size=params.train_batch_size, shuffle=True)
+    valid_loader = partial_loader(valid_dataset, batch_size=params.train_batch_size*2, shuffle=False)
+    test_loader  = partial_loader(test_dataset,  batch_size=params.train_batch_size*2, shuffle=False)
 
     def encoder_class():
         return GPS(**model_param)
 
     decoders: nn.ModuleDict = get_decoders(task_dict=task_dict,
-                                           channels=params.model_encoder_channels, 
+                                           in_dim=params.model_encoder_channels, 
+                                           hidden_dim=params.model_decoder_channels,
                                            num_layers=params.model_decoder_num_layers, 
                                            dropout=params.model_decoder_dropout)
 

@@ -1,8 +1,9 @@
 import os
-import hashlib
 import numpy as np
 import pandas as pd
 from typing import Dict, Any, Optional, Callable
+from tqdm.auto import tqdm
+import contextlib
 
 import torch
 from torch_geometric.data import Data, InMemoryDataset
@@ -12,11 +13,22 @@ from tdc.metadata import toxicity_dataset_names, adme_dataset_names
 
 from ogb.utils import smiles2graph
 
+try:
+    from rdkit import RDLogger
+    RDLogger.DisableLog('rdApp.*')
+except ImportError:
+    pass
+
 from metadata import metrics_to_metrics_fn, metrics_to_loss_fn
 
 
+def remove_overlap(df_target: pd.DataFrame, df_source: pd.DataFrame) -> pd.DataFrame:
+    leakage_smiles = set(df_source['smi'])
+    df_target = df_target[~df_target['smi'].isin(leakage_smiles)].reset_index(drop=True)
+    return df_target
+
+
 def load_data(datasets_to_use: Dict[str, str],
-              smi_leakage_method: str = 'none',
               loss_reduction: str = 'mean') -> tuple[
                                                         pd.DataFrame, 
                                                         pd.DataFrame, 
@@ -30,9 +42,11 @@ def load_data(datasets_to_use: Dict[str, str],
     for task_name, metric in datasets_to_use.items():
 
         if task_name in toxicity_dataset_names:
-            data = Tox(name=task_name)
+            with contextlib.redirect_stderr(open(os.devnull,'w')):
+                data = Tox(name=task_name)
         elif task_name in adme_dataset_names:
-            data = ADME(name=task_name)
+            with contextlib.redirect_stderr(open(os.devnull,'w')):
+                data = ADME(name=task_name)
         else:
             raise ValueError(f"Dataset {task_name} not found")
 
@@ -62,69 +76,84 @@ def load_data(datasets_to_use: Dict[str, str],
             'loss_fn'    : metrics_to_loss_fn[metric](loss_reduction),
             'weight'     : [0] if metric in ['mae'] else [1]
         }
-
-    if smi_leakage_method == 'test+valid':
-        leakage_smiles = set(df_valid['smi']).union(set(df_test['smi']))
-    elif smi_leakage_method == 'test':
-        leakage_smiles = set(df_test['smi'])
-    else:
-        return df_train, df_valid, df_test, task_dict
-
-    initial_counts = {task: df_train[task].notna().sum() for task in task_dict.keys()}
-    df_train = df_train[~df_train['smi'].isin(leakage_smiles)].reset_index(drop=True)
-    filtered_counts = {task: df_train[task].notna().sum() for task in task_dict.keys()}
-
-    print("Training data reduced due to molecule overlap with validation/test splits:")
-    for task in task_dict.keys():
-        lost = initial_counts[task] - filtered_counts[task]
-        rel  = (lost / initial_counts[task] * 100) if initial_counts[task] else 0.0
-        print(f"  {task}: {lost} ({rel:.2f}%)")
-
     return df_train, df_valid, df_test, task_dict
-
-
-class ADMEDataset(InMemoryDataset):
     
+
+class SparseMultitaskDataset(InMemoryDataset):
+
     def __init__(self,
-                 df: pd.DataFrame, 
-                 label_cols: list[str], 
-                 transform: Optional[Callable] = None):
-        """
-        df: must have 'smi' column and label columns
-        label_cols: list of dataset names or target columns
-        transform: optional transform to apply to the data
-        """
+                 df: pd.DataFrame | None = None,
+                 label_cols: list[str] | None = None,
+                 transform: Optional[Callable] = None,
+                 load_from: str | None = None):
+        
         super().__init__()
 
-        self.label_cols = label_cols
-        self.graphs  = []
-        self.targets = []
-
-        for _, row in df.iterrows():
-            data_graph_dict = smiles2graph(row['smi'])
-
-            for key, value in data_graph_dict.items():
-                if isinstance(value, np.ndarray):
-                    data_graph_dict[key] = torch.from_numpy(value)
-
-            data_graph = Data(x=data_graph_dict['node_feat'],
-                              edge_index=data_graph_dict['edge_index'],
-                              edge_attr=data_graph_dict['edge_feat'])
+        if load_from is not None:
+            assert os.path.exists(load_from), f"File {load_from} does not exist"
+            
+            blob = torch.load(load_from, map_location="cpu")
+            self.graphs = blob["graphs"]
+            self.targets = blob["targets"]
+            self.label_cols = blob["label_cols"]
 
             if transform is not None:
-                data_graph = transform(data_graph)  
+                self.graphs = [transform(g) for g in self.graphs]
+            return
 
-            target = row[label_cols].fillna(np.nan).values
-            target_tensor = torch.tensor(target, dtype=torch.float)
-            
-            self.graphs.append(data_graph)
-            self.targets.append(target_tensor)
+        assert df is not None, "df must be provided if load_from is not provided"
+        assert label_cols is not None, "label_cols must be provided if load_from is not provided"
 
-    def __len__(self):
+        self.label_cols = label_cols
+        build_fn = self._build_single
+
+        self.graphs, self.targets = [], []
+        iterator = df.iterrows()
+        iterator = tqdm(iterator, total=len(df), desc="Building graphs", disable=False)
+        for _, row in iterator:
+            g, t = build_fn(row, transform)
+            self.graphs.append(g)
+            self.targets.append(t)
+
+    def save_cache(self, path: str) -> None:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        torch.save(
+            {
+                "graphs": self.graphs,
+                "targets": self.targets,
+                "label_cols": self.label_cols
+            },
+            path,
+        )
+
+    def __len__(self) -> int:
         return len(self.graphs)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int):
         graph = self.graphs[idx]
         target = self.targets[idx]
-        label_dict = {task: target[i] for i, task in enumerate(self.label_cols)}
-        return graph, label_dict
+        return graph, {task: target[i] for i, task in enumerate(self.label_cols)}
+
+    def _build_single(self, row, transform):
+        smi = row.smi if hasattr(row, 'smi') else row['smi']
+
+        dg = smiles2graph(smi)
+        for k, v in dg.items():
+            if isinstance(v, np.ndarray):
+                dg[k] = torch.from_numpy(v)
+
+        data = Data(
+            x=dg["node_feat"],
+            edge_index=dg["edge_index"],
+            edge_attr=dg["edge_feat"],
+        )
+        if transform is not None:
+            data = transform(data)
+
+        if hasattr(row, '_fields'):
+            target_vals = [getattr(row, col) for col in self.label_cols]
+        else:
+            target_vals = row[self.label_cols].fillna(np.nan).values
+
+        target = torch.tensor(target_vals, dtype=torch.float)
+        return data, target
