@@ -3,12 +3,10 @@ command:
   - python
   - main_tdc.py
   - --wandb
-  - --weighting
-  - "DB_MTL"
   - --arch
   - "HPS"
   - --epochs
-  - "300"
+  - "100"
   - --loss-reduction
   - "sum"
   - --lr
@@ -33,5 +31,7 @@ parameters:
     values: [1, 2, 3]
   model-decoder-dropout:
     values: [0.1, 0.2, 0.3]
+  weighting:
+    values: ["DB_MTL", "FairGrad"]
   seed:
-    values: [0, 1]
+    values: [0, 1, 2]

@@ -19,6 +19,13 @@ from evaluator import CheckpointEvaluator
 from data import SparseMultitaskDataset, load_data, remove_overlap
 
 
+def get_sharing_factor(model, decoders):
+    total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    decoder_params = sum(sum(p.numel() for p in decoder.parameters() if p.requires_grad)
+                                       for decoder in decoders.values())
+    return total_params / decoder_params
+
+
 if __name__ == '__main__':
     params = parse_args(LibMTL_args)
     kwargs, optim_param, scheduler_param = prepare_args(params)
@@ -83,12 +90,16 @@ if __name__ == '__main__':
 
     def encoder_class():
         return GPS(**model_param)
-
+    
     decoders: nn.ModuleDict = get_decoders(task_dict=task_dict,
                                            in_dim=params.model_encoder_channels, 
                                            hidden_dim=params.model_decoder_channels,
                                            num_layers=params.model_decoder_num_layers, 
                                            dropout=params.model_decoder_dropout)
+    
+    sharing_factor = get_sharing_factor(encoder_class(), decoders)
+    print(f'Sharing factor: {sharing_factor}')
+    wandb.config.update({'sharing_factor': sharing_factor})
 
     trainer = Trainer(task_dict=task_dict,
                       weighting=params.weighting,
