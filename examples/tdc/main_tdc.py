@@ -23,7 +23,7 @@ def get_sharing_factor(model, decoders):
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     decoder_params = sum(sum(p.numel() for p in decoder.parameters() if p.requires_grad)
                                        for decoder in decoders.values())
-    return total_params / decoder_params
+    return decoder_params / (total_params - decoder_params)
 
 
 if __name__ == '__main__':
