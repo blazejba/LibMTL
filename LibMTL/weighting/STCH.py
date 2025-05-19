@@ -49,7 +49,7 @@ class STCH(AbsWeighting):
             max_term = torch.max(losses.data).detach()
             reg_losses = losses - max_term
 
-            loss = mu * torch.logsumexp(reg_losses/mu) * self.task_num
+            loss = mu * torch.logsumexp(reg_losses / mu, dim=0) * self.task_num
             loss.backward()
             
             return  batch_weight 

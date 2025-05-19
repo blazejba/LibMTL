@@ -6,9 +6,11 @@ cd /fs/home/banaszewski/pool-banaszewski/LibMTL/examples/tdc
 python main_pm6.py \
     --wandb \
     --weighting STCH \
+    --weighting-finetune DB_MTL \
+    --FairGrad_alpha 0.75 \
     --save_path results/with_pretraining/ \
     --arch HPS \
-    --epochs 5 \
+    --epochs 20 \
     --train-batch-size 1024 \
     --lr-factor 0.9 \
     --loss-reduction sum \

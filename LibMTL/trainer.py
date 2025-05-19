@@ -98,7 +98,7 @@ class Trainer(nn.Module):
         self.bilevel_methods = ['MOML', 'FORUM', 'AutoLambda']
 
         self._prepare_model(weighting, architecture, encoder_class, decoders)
-        self._prepare_optimizer(optim_param, scheduler_param)
+        self._prepare_optimizer(optim_param, scheduler_param.copy())
         
         self.meter = _PerformanceMeter(self.task_dict, self.multi_input)
 

@@ -1,6 +1,7 @@
 import os
 import types
 import wandb
+import numpy as np
 from datetime import datetime
 from functools import partial
 
@@ -14,7 +15,7 @@ from LibMTL.utils import set_random_seed, set_device
 from LibMTL.config import LibMTL_args, prepare_args
 
 from metadata import admet_metrics
-from helper_functions import parse_args
+from helper_functions import parse_args, build_stage_logger
 from evaluator import CheckpointEvaluator
 from examples.tdc.pm6_utils import dataloader_factory   
 from data import SparseMultitaskDataset, load_data, remove_overlap
@@ -30,7 +31,7 @@ if __name__ == '__main__':
 
     scheduler_param = {
         'scheduler': 'cos',
-        'min_lr': 0.00001,
+        'eta_min': params.lr * 0.01,
         'warmup_start_factor': 0.01
     }
     model_param = {
@@ -62,17 +63,6 @@ if __name__ == '__main__':
     wandb.define_metric('ft_step')
     wandb.define_metric('finetune/*', step_metric='ft_step')
 
-    def _make_stage_logger(stage: str):
-        step_key = 'pre_step' if stage == 'pretrain' else 'ft_step'
-        prefix   = 'pretrain' if stage == 'pretrain' else 'finetune'
-
-        def _logger(self, epoch=None, mode='train'):
-            log_dict = {f'{prefix}/{k}': v for k, v in self.results.items()}
-            if epoch is not None:
-                log_dict[step_key] = epoch
-            wandb.log(log_dict)
-        return _logger
-
     def encoder_class():
         return GPS(**model_param)
 
@@ -86,6 +76,7 @@ if __name__ == '__main__':
     print("PM6 pretraining stage...")
     train_loader, valid_loader, _, task_dict = dataloader_factory(params.train_batch_size, "data/pm6/")  
     scheduler_param['warmup_steps'] = len(train_loader)
+    scheduler_param['T_max'] = len(train_loader) * params.epochs
     decoders: nn.ModuleDict = get_decoders(task_dict=task_dict,
                                            in_dim=params.model_encoder_channels, 
                                            hidden_dim=None,
@@ -105,7 +96,7 @@ if __name__ == '__main__':
                       load_path=params.load_path,
                       **kwargs)
     
-    trainer.meter.log_wandb = types.MethodType(_make_stage_logger('pretrain'), trainer.meter)
+    trainer.meter.log_wandb = types.MethodType(build_stage_logger('pretrain'), trainer.meter)
     trainer.train(train_loader, valid_loader, epochs=params.epochs)
     pretrained_model = trainer.model
 
@@ -116,6 +107,8 @@ if __name__ == '__main__':
 
 
     print("Starting ADMET fine-tuning...")
+    N_FINETUNE_EPOCHS = 150
+
     if params.more_tasks:       
         from metadata import more_tasks
         datasets_to_use = {**admet_metrics, **more_tasks}
@@ -124,6 +117,7 @@ if __name__ == '__main__':
 
     df_train, df_valid, df_test, task_dict = load_data(datasets_to_use, params.loss_reduction)
     scheduler_param['warmup_steps'] = len(train_loader)
+    scheduler_param['T_max'] = len(train_loader) * N_FINETUNE_EPOCHS
 
     if params.smi_leakage_method != 'none':
         df_train = remove_overlap(df_train, df_test)
@@ -150,8 +144,15 @@ if __name__ == '__main__':
                                            num_layers=params.model_decoder_num_layers, 
                                            dropout=params.model_decoder_dropout)
 
+
+    if params.weighting_finetune == 'FairGrad':
+        kwargs['weight_args']['FairGrad_alpha'] = 0.75
+    elif params.weighting_finetune == 'DB_MTL':
+        kwargs['weight_args']['DB_beta'] = 0.9
+        kwargs['weight_args']['DB_beta_sigma'] = 0.0
+
     trainer = Trainer(task_dict=task_dict,
-                      weighting='EW',
+                      weighting=params.weighting_finetune,
                       architecture='HPS', 
                       encoder_class=encoder_class, 
                       decoders=decoders, 
@@ -163,10 +164,10 @@ if __name__ == '__main__':
                       load_path=params.load_path,
                       **kwargs)
     
-    trainer.meter.log_wandb = types.MethodType(_make_stage_logger('finetune'), trainer.meter)
+    trainer.meter.log_wandb = types.MethodType(build_stage_logger('finetune'), trainer.meter)
     trainer.model = copy_encoder_weights(pretrained_model, trainer.model)
     trainer.model = freeze_encoder(trainer.model)
-    trainer.train(train_loader, valid_loader, epochs=50)
+    trainer.train(train_loader, valid_loader, epochs=N_FINETUNE_EPOCHS)
 
 
 
@@ -177,7 +178,7 @@ if __name__ == '__main__':
     if params.save_path is not None:
         for ckpt_selection_method in params.eval_methods:
             print(f'Evaluating with {ckpt_selection_method} method')
-            evaluator.evaluate_by_method(ckpt_selection_method, 50)
+            evaluator.evaluate_by_method(ckpt_selection_method, N_FINETUNE_EPOCHS)
     else:
         trainer.test(test_loader, mode='test', reinit=False)
         results = trainer.meter.results.copy()

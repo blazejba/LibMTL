@@ -18,7 +18,7 @@ class CheckpointEvaluator:
     def clean_task_name(self, task_name: str) -> str:
         return "_".join(task_name.replace('val/', '').split('_')[:-1])
 
-    def evaluate_epoch(self, epoch: int, tasks: list = None):
+    def evaluate_epoch(self, epoch: int):
         if epoch in self.cache:
             print(f'Using cached results for epoch {epoch}')
             results = self.cache[epoch]
@@ -30,13 +30,7 @@ class CheckpointEvaluator:
             results = self.trainer.meter.results.copy()
             self.cache[epoch] = results
             self.trainer.meter.reinit()
-        if tasks is not None:
-            subset = {}
-            for t in tasks:
-                key = self.clean_task_name(t)
-                if key in results:
-                    subset[key] = results[key]
-            return subset
+        # Always return the full metric dictionary for this epoch
         return results
     
     @staticmethod
@@ -130,11 +124,11 @@ class CheckpointEvaluator:
 
             test_results = {}
             for ep, tasks in epoch_task_map.items():
-                res = self.evaluate_epoch(ep, tasks)
+                res = self.evaluate_epoch(ep)
                 for task in tasks:
-                    key = self.clean_task_name(task)
-                    if key in res:
-                        test_results[key] = res[key]
+                    cleaned = self.clean_task_name(task)
+                    if task in res:
+                        test_results[cleaned] = res[cleaned]
             avg_rank = self.get_average_rank(test_results)
             log_dict['test/average_rank_independent'] = avg_rank
 
