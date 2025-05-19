@@ -26,7 +26,7 @@ metric:
 
 parameters:
   model-decoder-channels:
-    values: [32, 64, 128]
+    values: [64, 128, 256]
   model-decoder-num-layers:
     values: [1, 2, 3]
   model-decoder-dropout:
