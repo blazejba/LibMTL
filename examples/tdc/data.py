@@ -7,7 +7,6 @@ import contextlib
 
 import torch
 from torch_geometric.data import Data, InMemoryDataset
-
 from tdc.single_pred import ADME, Tox
 from tdc.metadata import toxicity_dataset_names, adme_dataset_names
 
@@ -15,6 +14,7 @@ from ogb.utils import smiles2graph
 
 try:
     from rdkit import RDLogger
+    from rdkit import Chem
     RDLogger.DisableLog('rdApp.*')
 except ImportError:
     pass
@@ -22,10 +22,20 @@ except ImportError:
 from metadata import metrics_to_metrics_fn, metrics_to_loss_fn
 
 
-def remove_overlap(df_target: pd.DataFrame, df_source: pd.DataFrame) -> pd.DataFrame:
-    leakage_smiles = set(df_source['smi'])
-    df_target = df_target[~df_target['smi'].isin(leakage_smiles)].reset_index(drop=True)
-    return df_target
+def remove_overlap(
+        df_train: pd.DataFrame, 
+        df_test: pd.DataFrame
+        ) -> pd.DataFrame:
+    
+    if "[" in df_test['smi'].values[0]:
+        for mol_row in df_test['ordered_smiles']:
+            mol = Chem.MolFromSmiles(mol_row['ordered_smiles'])
+            for atom in mol.GetAtoms():
+                atom.SetAtomMapNum(0)
+    
+    smi_prevent_leakage = set(df_test['smi'])
+    df_train = df_train[~df_train['smi'].isin(smi_prevent_leakage)].reset_index(drop=True)
+    return df_train
 
 
 def load_data(datasets_to_use: Dict[str, str],
