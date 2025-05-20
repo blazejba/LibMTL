@@ -12,6 +12,7 @@ def str2bool(v):
 
 def parse_args(parser):
     # model
+    parser.add_argument('--model-backend', default='GPS', choices=['GPS', 'GRIT'])
     parser.add_argument('--loss-reduction', default='sum', choices=['mean', 'sum'])
     ## encoder
     parser.add_argument('--model-encoder-channels', default=64, type=int)
@@ -23,7 +24,6 @@ def parse_args(parser):
     parser.add_argument('--model-decoder-num-layers', default=2, type=int)
     parser.add_argument('--model-decoder-dropout', default=0.1, type=float)
     # training
-    parser.add_argument('--weighting-finetune', default='FairGrad', choices=['FairGrad', 'DB_MTL'])
     parser.add_argument('--epochs', default=10, type=int)
     parser.add_argument('--lr-factor', default=0.9, type=float)
     parser.add_argument('--patience', default=5, type=int)

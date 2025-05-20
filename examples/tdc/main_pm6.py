@@ -19,11 +19,14 @@ from helper_functions import parse_args, build_stage_logger
 from evaluator import CheckpointEvaluator
 from examples.tdc.pm6_utils import dataloader_factory   
 from data import SparseMultitaskDataset, load_data, remove_overlap
-from model import GPS, get_decoders, freeze_encoder, copy_encoder_weights
+from model import GPS, GRIT, get_decoders, freeze_encoder, copy_encoder_weights
 
 
 if __name__ == '__main__':
     params = parse_args(LibMTL_args)
+
+    backend = getattr(params, "model_backend", "GPS").upper()
+    assert backend in {"GPS", "GRIT"}, f"Unknown model_backend {backend}"
     kwargs, optim_param, scheduler_param = prepare_args(params)
     set_device(params.gpu_id); set_random_seed(params.seed)
 
@@ -34,13 +37,23 @@ if __name__ == '__main__':
         'eta_min': params.lr * 0.01,
         'warmup_start_factor': 0.01
     }
-    model_param = {
-        'channels': params.model_encoder_channels, 
-        'pe_dim': params.model_encoder_pe_dim, 
-        'num_layers': params.model_encoder_num_layers, 
-        'attn_type': 'multihead', 
-        'attn_kwargs': {'dropout': params.model_encoder_dropout}
-    }
+    if backend == "GPS":
+        model_param = {
+            'channels': params.model_encoder_channels,
+            'pe_dim': params.model_encoder_pe_dim,
+            'num_layers': params.model_encoder_num_layers,
+            'attn_type': 'multihead',
+            'attn_kwargs': {'dropout': params.model_encoder_dropout}
+        }
+    else:
+        model_param = {
+            'num_node_features': 9,               
+            'num_edge_types': 4,                
+            'hidden_dim': params.model_encoder_channels,
+            'num_layers': params.model_encoder_num_layers,
+            'num_heads': getattr(params, "model_encoder_heads", 4),                 
+            'dropout': params.model_encoder_dropout
+        }
 
     all_params = vars(params) | optim_param | scheduler_param | model_param
     
@@ -51,9 +64,9 @@ if __name__ == '__main__':
         os.makedirs(os.path.join(params.save_path, 'pm6'), exist_ok=True)
         os.makedirs(os.path.join(params.save_path, 'tdc'), exist_ok=True)
     
-    wandb.init(name=f'{params.weighting}_{date_str}',               
+    wandb.init(name=f'{params.weighting}_{date_str}',
                save_code=True,
-               config=all_params,
+               config={**all_params, "backend": backend},
                entity='BorgwardtLab',
                project='libmtl_tdc',
                mode='online' if params.wandb else 'disabled')
@@ -64,11 +77,9 @@ if __name__ == '__main__':
     wandb.define_metric('finetune/*', step_metric='ft_step')
 
     def encoder_class():
-        return GPS(**model_param)
-
-
-
-
+        return (GPS(**model_param) 
+                if backend == "GPS" 
+                else GRIT(**model_param))
 
 
 
@@ -144,15 +155,8 @@ if __name__ == '__main__':
                                            num_layers=params.model_decoder_num_layers, 
                                            dropout=params.model_decoder_dropout)
 
-
-    if params.weighting_finetune == 'FairGrad':
-        kwargs['weight_args']['FairGrad_alpha'] = 0.75
-    elif params.weighting_finetune == 'DB_MTL':
-        kwargs['weight_args']['DB_beta'] = 0.9
-        kwargs['weight_args']['DB_beta_sigma'] = 0.0
-
     trainer = Trainer(task_dict=task_dict,
-                      weighting=params.weighting_finetune,
+                      weighting="EW",
                       architecture='HPS', 
                       encoder_class=encoder_class, 
                       decoders=decoders, 
