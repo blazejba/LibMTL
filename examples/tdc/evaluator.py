@@ -16,7 +16,9 @@ class CheckpointEvaluator:
         self.cache = {}
 
     def clean_task_name(self, task_name: str) -> str:
-        return "_".join(task_name.replace('val/', '').split('_')[:-1])
+        # return "_".join(task_name.replace('val/', '').split('_')[:-1])
+        task_name = task_name.split('/')[-1]
+        return "_".join(task_name.split('_')[:-1])
 
     def evaluate_epoch(self, epoch: int):
         if epoch in self.cache:
