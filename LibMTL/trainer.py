@@ -1,3 +1,6 @@
+import datetime
+import sys
+
 import torch, os, copy, torch_geometric
 import wandb
 
@@ -7,10 +10,25 @@ import numpy as np
 import cvxpy as cp
 
 from LibMTL._record import _PerformanceMeter
-from LibMTL.utils import count_parameters, set_param
+from LibMTL.utils import count_parameters
 import LibMTL.weighting as weighting_method
 import LibMTL.architecture as architecture_method
 
+def _parse_slurm_time(t: str) -> int:
+    """
+    Convert a SLURM time string like 'D-HH:MM:SS' or 'HH:MM:SS' to seconds.
+    """
+    if t is None:
+        return None
+    if '-' in t:
+        days, rest = t.split('-')
+        h, m, s = map(int, rest.split(':'))
+        return int(days) * 86400 + h * 3600 + m * 60 + s
+    else:
+        h, m, s = map(int, t.split(':'))
+        return h * 3600 + m * 60 + s
+    
+    
 class Trainer(nn.Module):
     r'''A Multi-Task Learning Trainer.
 
@@ -80,7 +98,7 @@ class Trainer(nn.Module):
     '''
     def __init__(self, task_dict, weighting, architecture, encoder_class, decoders, 
                  rep_grad, multi_input, optim_param, scheduler_param,
-                 save_path=None, load_path=None, **kwargs):
+                 save_path=None, load_path=None, time_limit=None, **kwargs):
         super(Trainer, self).__init__()
         
         self.device = torch.device('cuda:0')
@@ -95,16 +113,29 @@ class Trainer(nn.Module):
         self.load_path = load_path
         self.weighting = weighting
 
+        self.epoch_duration = []
+        self.time_limit = _parse_slurm_time(time_limit)
+        self.start_time = datetime.datetime.now()
+        self.start_epoch = 0
+
         self.bilevel_methods = ['MOML', 'FORUM', 'AutoLambda']
 
         self._prepare_model(weighting, architecture, encoder_class, decoders)
         self._prepare_optimizer(optim_param, scheduler_param.copy())
+
+        if self.load_path is not None:
+            self._resume_training(self.load_path)
         
         self.meter = _PerformanceMeter(self.task_dict, self.multi_input)
 
         if self.weighting in self.bilevel_methods:
             self._prepare_tw(self.kwargs['weight_args']['outer_lr'])
         
+    def _is_enough_time(self):
+        if self.time_limit is not None:
+            return (datetime.datetime.now() - self.start_time).total_seconds() < self.time_limit
+        return True
+    
     def _prepare_model(self, weighting, architecture, encoder_class, decoders):
 
         weighting_class = weighting_method.__dict__['EW' if self.weighting in self.bilevel_methods else weighting] 
@@ -128,6 +159,24 @@ class Trainer(nn.Module):
             self.model.load_state_dict(torch.load(self.load_path), strict=False)
             print('Load Model from - {}'.format(self.load_path))
         count_parameters(self.model)
+
+    def _resume_training(self, ckpt_path):
+        if os.path.isdir(ckpt_path):
+            ckpt_path = os.path.join(ckpt_path, 'last.pt')
+        checkpoint = torch.load(ckpt_path, map_location=self.device)
+
+        if isinstance(checkpoint, dict) and 'model_state' in checkpoint:
+            self.model.load_state_dict(checkpoint['model_state'], strict=False)
+            if checkpoint.get('optimizer_state') and self.optimizer is not None:
+                self.optimizer.load_state_dict(checkpoint['optimizer_state'])
+            if self.scheduler is not None and checkpoint.get('scheduler_state'):
+                self.scheduler.load_state_dict(checkpoint['scheduler_state'])
+            self.start_epoch = checkpoint.get('epoch', -1) + 1
+            self.epoch_duration = checkpoint.get('epoch_duration', [])
+            print(f'Loaded checkpoint from {ckpt_path}. Resuming at epoch {self.start_epoch}.')
+        else:
+            self.model.load_state_dict(checkpoint, strict=False)
+            print(f'Loaded model weights from {ckpt_path} (no optimizer/scheduler).')
         
     def _prepare_optimizer(self, optim_param: dict, scheduler_param: dict):
         optim_dict = {
@@ -265,8 +314,9 @@ class Trainer(nn.Module):
         self.batch_weight = np.zeros([self.task_num, epochs, train_batch])
         self.model.train_loss_buffer = np.zeros([self.task_num, epochs])
         self.model.epochs = epochs
-        for epoch in range(epochs):
+        for epoch in range(self.start_epoch, epochs):
             self.model.epoch = epoch
+            epoch_start_time = datetime.datetime.now()
             self.model.train()
             self.meter.record_time('begin')
             for batch_index in range(train_batch):
@@ -318,12 +368,29 @@ class Trainer(nn.Module):
                     wandb.log({'lr': self.scheduler.get_last_lr()[0]})
                 else:
                     self.scheduler.step()
-            # if self.save_path is not None and self.meter.best_result['epoch'] == epoch:
-            #     torch.save(self.model.state_dict(), os.path.join(self.save_path, 'best.pt'))
-            #     print('Save Model {} to {}'.format(epoch, os.path.join(self.save_path, 'best.pt')))
+                    
             if self.save_path:
                 torch.save(self.model.state_dict(), os.path.join(self.save_path, f'epoch_{epoch}.pt'))
-                print('Save Model {} to {}'.format(epoch, os.path.join(self.save_path, f'epoch_{epoch}.pt')))
+                torch.save({
+                    'epoch': epoch,
+                    'model_state': self.model.state_dict(),
+                    'optimizer_state': self.optimizer.state_dict(),
+                    'scheduler_state': self.scheduler.state_dict() if self.scheduler else None,
+                    'epoch_duration': self.epoch_duration,
+                }, os.path.join(self.save_path, 'last.pt'))
+                print(f'Saved checkpoint for epoch {epoch} to {os.path.join(self.save_path, "last.pt")}')
+
+                if self.time_limit is not None:
+                    epoch_end_time = datetime.datetime.now()
+                    self.epoch_duration.append((epoch_end_time - epoch_start_time).total_seconds())
+                    if len(self.epoch_duration) >= 3: 
+                        est = np.percentile(self.epoch_duration, 95)
+                        elapsed = (epoch_end_time - self.start_time).total_seconds()
+                        remaining = self.time_limit - elapsed
+
+                        if remaining < est * 1.05:
+                            print(f"Not enough wall‑time left (≈{remaining:.0f}s). Exiting with code 99 for resubmission.")
+                            sys.exit(99)
         self.meter.display_best_result()
 
         if return_weight:
@@ -433,8 +500,9 @@ class Trainer(nn.Module):
         self.batch_weight = np.zeros([self.task_num, epochs, train_batch])
         self.model.train_loss_buffer = np.zeros([self.task_num, epochs])
         self.model.epochs = epochs
-        for epoch in range(epochs):
+        for epoch in range(self.start_epoch, epochs):
             self.model.epoch = epoch
+            epoch_start_time = datetime.datetime.now()
             self.model.train()
             self.meter.record_time('begin')
             for batch_index in range(train_batch):
@@ -474,6 +542,7 @@ class Trainer(nn.Module):
             if self.save_path is not None and self.meter.best_result['epoch'] == epoch:
                 torch.save(self.model.state_dict(), os.path.join(self.save_path, 'best.pt'))
                 print('Save Model {} to {}'.format(epoch, os.path.join(self.save_path, 'best.pt')))
+
         self.meter.display_best_result()
         if return_weight:
             return self.batch_weight

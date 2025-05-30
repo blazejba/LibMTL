@@ -33,7 +33,9 @@ def parse_args(parser):
     # evaluation
     parser.add_argument('--eval-methods', default=['improvement', 'pps', 'last', 'independent'], nargs='+', type=str)
     # misc
+    parser.add_argument('--load-path', default=None, type=str)
     parser.add_argument('--wandb', action='store_true', help='use wandb')
+    parser.add_argument('--time-limit', default=None, type=str)
 
     args = parser.parse_args()
     assert len(args.eval_methods) > 0, 'No evaluation method provided'
