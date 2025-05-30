@@ -1,7 +1,9 @@
 import os
+import sys
+import json
 import types
 import wandb
-import numpy as np
+import pathlib
 from datetime import datetime
 from functools import partial
 
@@ -24,6 +26,12 @@ from model import GPS, GRIT, get_decoders, freeze_encoder, copy_encoder_weights
 
 if __name__ == '__main__':
     params = parse_args(LibMTL_args)
+
+    if params.save_path is not None and getattr(params, 'load_path', None) is None:
+        existing_ckpt = os.path.join(params.save_path, 'pm6', 'last.pt')
+        if os.path.isfile(existing_ckpt):
+            print(f'Found checkpoint {existing_ckpt}. Resuming training.')
+            params.load_path = existing_ckpt
 
     backend = getattr(params, "model_backend", "GPS").upper()
     assert backend in {"GPS", "GRIT"}, f"Unknown model_backend {backend}"
@@ -57,19 +65,44 @@ if __name__ == '__main__':
 
     all_params = vars(params) | optim_param | scheduler_param | model_param
     
-    date_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-    if params.save_path is not None:
-        params.save_path = os.path.join(params.save_path, f'{params.weighting}_{date_str}')
-        os.makedirs(params.save_path, exist_ok=True)
-        os.makedirs(os.path.join(params.save_path, 'pm6'), exist_ok=True)
-        os.makedirs(os.path.join(params.save_path, 'tdc'), exist_ok=True)
-    
-    wandb.init(name=f'{params.weighting}_{date_str}',
+    run_name, run_id = None, None
+
+    if params.load_path is not None:
+        exp_dir = pathlib.Path(params.load_path).parent.parent
+        params.save_path = str(exp_dir)
+        meta_file = os.path.join(params.save_path, 'wandb_run.json')
+        if os.path.isfile(meta_file):
+            with open(meta_file, 'r') as f:
+                meta = json.load(f)
+            run_name = meta.get('run_name')
+            run_id   = meta.get('run_id')
+            if run_id:
+                print(f"Resuming WandB run {run_name} ({run_id})")
+    else:
+        if params.save_path is None:
+            date_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+            params.save_path = os.path.join("results/with_pretraining",
+                                            f'{params.weighting}_{date_str}')
+            run_name = f'{params.weighting}_{date_str}'
+        else:
+            run_name = pathlib.Path(params.save_path).name
+
+    os.makedirs(params.save_path, exist_ok=True)
+    os.makedirs(os.path.join(params.save_path, 'pm6'), exist_ok=True)
+    os.makedirs(os.path.join(params.save_path, 'tdc'), exist_ok=True)
+
+    wandb.init(name=run_name,
+               id=run_id,
+               resume='must' if run_id else None,
                save_code=True,
                config={**all_params, "backend": backend},
                entity='BorgwardtLab',
                project='libmtl_tdc',
                mode='online' if params.wandb else 'disabled')
+
+    if run_id is None and params.save_path is not None:
+        with open(os.path.join(params.save_path, 'wandb_run.json'), 'w') as f:
+            json.dump({'run_id': wandb.run.id, 'run_name': wandb.run.name}, f)
 
     wandb.define_metric('pre_step')
     wandb.define_metric('pretrain/*', step_metric='pre_step')
@@ -85,7 +118,15 @@ if __name__ == '__main__':
 
 
     print("PM6 pretraining stage...")
-    train_loader, valid_loader, _, task_dict = dataloader_factory(params.train_batch_size, "data/pm6/")  
+    if backend == "GPS":
+        transform = T.AddRandomWalkPE(walk_length=params.model_encoder_pe_dim, attr_name='pe')
+    else:
+        transform = None
+
+    train_loader, valid_loader, _, task_dict = dataloader_factory(train_batch_size=params.train_batch_size,
+                                                                  cache_dir="data/pm6_processed/", 
+                                                                  transform=transform)  
+
     scheduler_param['warmup_steps'] = len(train_loader)
     scheduler_param['T_max'] = len(train_loader) * params.epochs
     decoders: nn.ModuleDict = get_decoders(task_dict=task_dict,
@@ -105,6 +146,7 @@ if __name__ == '__main__':
                       scheduler_param=scheduler_param, 
                       save_path=os.path.join(params.save_path, 'pm6'),
                       load_path=params.load_path,
+                      time_limit=params.time_limit,
                       **kwargs)
     
     trainer.meter.log_wandb = types.MethodType(build_stage_logger('pretrain'), trainer.meter)
@@ -118,7 +160,7 @@ if __name__ == '__main__':
 
 
     print("Starting ADMET fine-tuning...")
-    N_FINETUNE_EPOCHS = 150
+    N_FINETUNE_EPOCHS = 100
 
     if params.more_tasks:       
         from metadata import more_tasks
@@ -187,3 +229,5 @@ if __name__ == '__main__':
         trainer.test(test_loader, mode='test', reinit=False)
         results = trainer.meter.results.copy()
         wandb.log(results)
+
+    sys.exit(0)

@@ -91,12 +91,11 @@ class GritTransformerLayer(nn.Module):
             nn.Linear(ff_hidden_dim, hidden_dim)
         )
 
-    def forward(self, x, attn_bias, batch):
+    def forward(self, x, attn_bias):
         """
         Forward pass for the transformer layer.
         :param x: Node feature matrix of shape [N, hidden_dim]
         :param attn_bias: Attention bias tensor of shape [n_heads, N, N] (or [N, N] broadcastable)
-        :param batch: Batch index tensor of shape [N] mapping nodes to graphs
         """
         N, d = x.size()
         H = self.n_heads
@@ -119,11 +118,11 @@ class GritTransformerLayer(nn.Module):
         out = self.W_out(out)
         out = self.attn_dropout(out)
 
-        x = self.norm1(x + out, batch)
+        x = self.norm1(x + out)
 
         ff_out = self.ffn(x)
         ff_out = self.ff_dropout(ff_out)
-        return self.norm2(x + ff_out, batch)
+        return self.norm2(x + ff_out)
 
 class GRIT(nn.Module):
     """
@@ -141,8 +140,8 @@ class GRIT(nn.Module):
             rpe_steps: int = 4, 
             max_degree: int = 100):
         """
-        :param num_node_features: Dimension of input node features (or size of embedding vocab if features are categorical).
-        :param num_edge_types: Number of distinct edge types (for edge embedding bias); set None if not applicable.
+        :param num_node_features: Dimension of input node features (assumes categorical).
+        :param num_edge_types: Number of distinct edge types (for edge embedding bias).
         :param hidden_dim: Hidden dimension size (embedding size for nodes and model width).
         :param num_layers: Number of Transformer layers.
         :param num_heads: Number of attention heads in each layer.
@@ -167,7 +166,7 @@ class GRIT(nn.Module):
             nn.Linear(mlp_hidden, num_heads)
         )
 
-        self.layers = nn.ModuleList([
+        self.attn_layers = nn.ModuleList([
             GritTransformerLayer(hidden_dim, num_heads, dropout)
             for _ in range(num_layers)
         ])
@@ -180,10 +179,10 @@ class GRIT(nn.Module):
         node_idx = torch.argmax(x, dim=1)
         return self.node_emb(node_idx)
 
-    def _compute_degrees(self, edge_index: torch.Tensor, num_nodes: int, device) -> torch.Tensor:
+    def _compute_degrees(self, edge_index: torch.Tensor, num_nodes: int) -> torch.Tensor:
         """Return clamped degree for each node."""
         row = edge_index[0]
-        deg = torch.zeros(num_nodes, dtype=torch.long, device=device)
+        deg = torch.zeros(num_nodes, dtype=torch.long, device=edge_index.device)
         deg.scatter_add_(0, row, torch.ones_like(row, dtype=torch.long))
         return deg.clamp(max=self.max_degree)
 
@@ -261,14 +260,13 @@ class GRIT(nn.Module):
 
         return attn_bias
 
-    def forward(self, data):
+    def forward(self, data: Data) -> torch.Tensor:
         # 1) Node embeddings
         x = self._embed_nodes(data)
 
         # 2) Node degrees
         N = x.size(0)
-        device = x.device
-        deg = self._compute_degrees(data.edge_index, N, device)
+        deg = self._compute_degrees(data.edge_index, N)
 
         # 3) Attention bias (RRWP + edge types)
         attn_bias = self._construct_attention_bias(
@@ -279,9 +277,9 @@ class GRIT(nn.Module):
         )
 
         # 4) Transformer encoder
-        for layer in self.layers:
+        for layer in self.attn_layers:
             x = x + self.degree_emb(deg)
-            x = layer(x, attn_bias, data.batch)
+            x = layer(x, attn_bias)
 
         # 5) Pooling
         return global_add_pool(x, data.batch)
