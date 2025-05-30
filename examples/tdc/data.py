@@ -1,9 +1,9 @@
 import os
+import contextlib
 import numpy as np
 import pandas as pd
-from typing import Dict, Any, Optional, Callable
 from tqdm.auto import tqdm
-import contextlib
+from typing import Dict, Any, Optional, Callable, List
 
 import torch
 from torch_geometric.data import Data, InMemoryDataset
@@ -27,11 +27,23 @@ def remove_overlap(
         df_test: pd.DataFrame
         ) -> pd.DataFrame:
     
-    if "[" in df_test['smi'].values[0]:
-        for mol_row in df_test['ordered_smiles']:
-            mol = Chem.MolFromSmiles(mol_row['ordered_smiles'])
+    to_remove = []
+    if "[" in df_train['smi'].values[0]:
+        for i, mol_row in enumerate(df_train['smi']):
+
+            if i % 100_000 == 0:
+                print(f"Removing overlap {i+1}/{len(df_train)}")
+            
+            mol = Chem.MolFromSmiles(mol_row)
+            
+            if mol is None:
+                continue
+
             for atom in mol.GetAtoms():
                 atom.SetAtomMapNum(0)
+            smi = Chem.MolToSmiles(mol)
+            if smi in df_test['smi'].values:
+                to_remove.append(smi)
     
     smi_prevent_leakage = set(df_test['smi'])
     df_train = df_train[~df_train['smi'].isin(smi_prevent_leakage)].reset_index(drop=True)
@@ -95,20 +107,27 @@ class SparseMultitaskDataset(InMemoryDataset):
                  df: pd.DataFrame | None = None,
                  label_cols: list[str] | None = None,
                  transform: Optional[Callable] = None,
-                 load_from: str | None = None):
+                 load_from: str | Dict | None = None,
+                 shard_paths: List[str] | None = None):
         
         super().__init__()
 
-        if load_from is not None:
-            assert os.path.exists(load_from), f"File {load_from} does not exist"
-            
-            blob = torch.load(load_from, map_location="cpu")
-            self.graphs = blob["graphs"]
-            self.targets = blob["targets"]
-            self.label_cols = blob["label_cols"]
+        self.transform = transform
 
-            if transform is not None:
-                self.graphs = [transform(g) for g in self.graphs]
+        # --- Sharding support ---
+        self.shard_paths: List[str] | None = shard_paths
+        self.current_shard_idx: int = 0
+        self._reload_flag: bool = False
+        self._samples_seen: int = 0
+
+        # If shard paths are provided, load the first shard and exit
+        if self.shard_paths:
+            # label_cols will be set from the cached shard
+            self.load_shard(self.current_shard_idx)
+            return
+
+        if load_from is not None:
+            self.load_from_cache(load_from)
             return
 
         assert df is not None, "df must be provided if load_from is not provided"
@@ -125,6 +144,36 @@ class SparseMultitaskDataset(InMemoryDataset):
             self.graphs.append(g)
             self.targets.append(t)
 
+    def load_from_cache(self, load_from: str | Dict) -> None:
+
+        if isinstance(load_from, str):
+            assert os.path.exists(load_from), f"File {load_from} does not exist"
+            blob = torch.load(load_from, map_location="cpu")
+        elif isinstance(load_from, dict):
+            blob = load_from
+        else:
+            raise ValueError(f"load_from must be a string or a dictionary, got {type(load_from)}")
+
+        self.graphs = blob["graphs"]
+        self.targets = blob["targets"]
+        self.label_cols = blob["label_cols"]
+
+        if self.transform is not None:
+            self.graphs = [self.transform(g) for g in self.graphs]
+        return 
+
+    def load_shard(self, shard_idx: int) -> None:
+        """
+        Load a shard saved with `save_cache`. The shard index is taken
+        modulo the number of shards so cycling past the last shard wraps
+        back to the first one.
+        """
+        if not self.shard_paths:
+            raise ValueError("No shard paths provided for sharded dataset.")
+        shard_idx = shard_idx % len(self.shard_paths)
+        self.load_from_cache(self.shard_paths[shard_idx])
+        self.current_shard_idx = shard_idx
+    
     def save_cache(self, path: str) -> None:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         torch.save(
@@ -137,11 +186,26 @@ class SparseMultitaskDataset(InMemoryDataset):
         )
 
     def __len__(self) -> int:
+        # If the previous epoch exhausted this shard, load the next one
+        if self.shard_paths and self._reload_flag:
+            next_idx = (self.current_shard_idx + 1) % len(self.shard_paths)
+            self.load_shard(next_idx)
+            self._samples_seen = 0
+            self._reload_flag = False
         return len(self.graphs)
 
     def __getitem__(self, idx: int):
         graph = self.graphs[idx]
         target = self.targets[idx]
+
+        # --- Sharding bookkeeping ---
+        if self.shard_paths:
+            self._samples_seen += 1
+            if self._samples_seen >= len(self.graphs):
+                # All samples from the current shard have been used;
+                # flag for reload on the next epoch.
+                self._reload_flag = True
+
         return graph, {task: target[i] for i, task in enumerate(self.label_cols)}
 
     def _build_single(self, row, transform):
