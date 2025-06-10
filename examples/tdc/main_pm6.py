@@ -3,6 +3,7 @@ import sys
 import json
 import types
 import wandb
+import time 
 import pathlib
 from datetime import datetime
 from functools import partial
@@ -118,14 +119,8 @@ if __name__ == '__main__':
 
 
     print("PM6 pretraining stage...")
-    if backend == "GPS":
-        transform = T.AddRandomWalkPE(walk_length=params.model_encoder_pe_dim, attr_name='pe')
-    else:
-        transform = None
-
-    train_loader, valid_loader, _, task_dict = dataloader_factory(train_batch_size=params.train_batch_size,
-                                                                  cache_dir="data/pm6_processed/", 
-                                                                  transform=transform)  
+    start_time = time.time()
+    print(f"Time taken to build PM6 dataloaders: {time.time() - start_time:.2f} seconds")
 
     scheduler_param['warmup_steps'] = len(train_loader)
     scheduler_param['T_max'] = len(train_loader) * params.epochs
