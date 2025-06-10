@@ -7,7 +7,7 @@ import wandb
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-import cvxpy as cp
+from torch.amp import autocast, GradScaler
 
 from LibMTL._record import _PerformanceMeter
 from LibMTL.utils import count_parameters
@@ -128,8 +128,8 @@ class Trainer(nn.Module):
         
         self.meter = _PerformanceMeter(self.task_dict, self.multi_input)
 
-        if self.weighting in self.bilevel_methods:
-            self._prepare_tw(self.kwargs['weight_args']['outer_lr'])
+        # Enable GradScaler for mixed-precision training
+        self.scaler = GradScaler()
         
     def _is_enough_time(self):
         if self.time_limit is not None:
@@ -330,7 +330,8 @@ class Trainer(nn.Module):
                             train_input, train_gt = self._process_data(train_loader[task])
                             train_inputs[task], train_gts[task] = train_input, train_gt
 
-                    train_losses_, train_preds = self.forward4loss(self.model, train_inputs, train_gts, return_preds=True)
+                    with autocast(dtype=torch.bfloat16, device_type="cuda"):
+                        train_losses_, train_preds = self.forward4loss(self.model, train_inputs, train_gts, return_preds=True)
                     train_losses.append(train_losses_)
                 train_losses = torch.stack(train_losses).squeeze(0)
 
@@ -341,10 +342,24 @@ class Trainer(nn.Module):
                         self.meter.update(train_preds[task], train_gts[task], task)
 
                 self.optimizer.zero_grad(set_to_none=False)
-                w = self.model.backward(train_losses, **self.kwargs['weight_args'])
-                if w is not None:
-                    self.batch_weight[:, epoch, batch_index] = w
-                self.optimizer.step()
+
+                # Weighting methods differ: STCH returns (weights, scalar_loss),
+                # others still perform .backward() internally and return only weights.
+                with autocast(dtype=torch.bfloat16, device_type="cuda"):
+                    backward_out = self.model.backward(train_losses, **self.kwargs['weight_args'])
+
+                if isinstance(backward_out, tuple):
+                    w, scalar_loss = backward_out
+                    if w is not None:
+                        self.batch_weight[:, epoch, batch_index] = w
+                    self.scaler.scale(scalar_loss).backward()
+                    self.scaler.step(self.optimizer)
+                    self.scaler.update()
+                else:
+                    w = backward_out
+                    if w is not None:
+                        self.batch_weight[:, epoch, batch_index] = w
+                    self.optimizer.step()
 
                 if self.weighting == 'FAMO':
                     with torch.no_grad():

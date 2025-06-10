@@ -31,15 +31,12 @@ class STCH(AbsWeighting):
         
         if self.epoch < warmup_epoch:
             loss = torch.mul(torch.log(losses+1e-20), torch.ones_like(losses).to(self.device)).sum()
-            loss.backward()
-            return  batch_weight 
+            return batch_weight, loss
         elif self.epoch == warmup_epoch:
             loss = torch.mul(torch.log(losses+1e-20), torch.ones_like(losses).to(self.device)).sum()
             self.average_loss += losses.detach() 
             self.average_loss_count += 1
-            
-            loss.backward()
-            return  batch_weight 
+            return batch_weight, loss
         else:
             if self.nadir_vector == None:
                 self.nadir_vector = self.average_loss / self.average_loss_count
@@ -50,6 +47,4 @@ class STCH(AbsWeighting):
             reg_losses = losses - max_term
 
             loss = mu * torch.logsumexp(reg_losses / mu, dim=0) * self.task_num
-            loss.backward()
-            
-            return  batch_weight 
+            return batch_weight, loss
