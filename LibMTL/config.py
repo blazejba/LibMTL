@@ -196,9 +196,9 @@ def prepare_args(params):
     else:
         raise ValueError('No support architecture method {}'.format(params.arch)) 
         
-    if params.optim in ['adam', 'sgd', 'adagrad', 'rmsprop']:
-        if params.optim == 'adam':
-            optim_param = {'optim': 'adam', 'lr': params.lr, 'weight_decay': params.weight_decay}
+    if params.optim in ['adam', 'adamw', 'sgd', 'adagrad', 'rmsprop']:
+        if params.optim == 'adam' or params.optim == 'adamw':
+            optim_param = {'optim': params.optim, 'lr': params.lr, 'weight_decay': params.weight_decay, 'fused': True}
         elif params.optim == 'sgd':
             optim_param = {'optim': 'sgd', 'lr': params.lr, 
                            'weight_decay': params.weight_decay, 'momentum': params.momentum}

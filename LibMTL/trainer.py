@@ -182,6 +182,7 @@ class Trainer(nn.Module):
         optim_dict = {
             'sgd':  torch.optim.SGD,
             'adam': torch.optim.Adam,
+            'adamw': torch.optim.AdamW,
             'adagrad': torch.optim.Adagrad,
             'rmsprop': torch.optim.RMSprop,
         }
