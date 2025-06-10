@@ -3,6 +3,7 @@ import sys
 import json
 import types
 import wandb
+import gc
 import time 
 import pathlib
 from datetime import datetime
@@ -10,7 +11,6 @@ from functools import partial
 
 import torch
 import torch.nn as nn
-import torch_geometric.transforms as T
 from torch_geometric.data import DataLoader
 
 from LibMTL import Trainer
@@ -18,11 +18,15 @@ from LibMTL.utils import set_random_seed, set_device
 from LibMTL.config import LibMTL_args, prepare_args
 
 from metadata import admet_metrics
-from helper_functions import parse_args, build_stage_logger
 from evaluator import CheckpointEvaluator
 from examples.tdc.pm6_utils import dataloader_factory   
+from helper_functions import parse_args, build_stage_logger
 from data import SparseMultitaskDataset, load_data, remove_overlap
-from model import GPS, GRIT, get_decoders, freeze_encoder, copy_encoder_weights
+from model import get_decoders, freeze_encoder, copy_encoder_weights
+from grit import GritTransformer
+
+torch.set_float32_matmul_precision("medium")
+torch.backends.cuda.enable_flash_sdp(True)
 
 
 if __name__ == '__main__':
@@ -56,15 +60,18 @@ if __name__ == '__main__':
         }
     else:
         model_param = {
-            'num_node_features': 9,               
-            'num_edge_types': 4,                
+            'rrwp_dim': params.model_encoder_pe_dim,
             'hidden_dim': params.model_encoder_channels,
             'num_layers': params.model_encoder_num_layers,
-            'num_heads': getattr(params, "model_encoder_heads", 4),                 
-            'dropout': params.model_encoder_dropout
+            'num_heads': params.model_encoder_num_heads,                
+            'dropout': params.model_encoder_dropout,
+            'attn_dropout': params.model_encoder_dropout,
+            'clamp': 5.0,
+            'bn_momentum': 0.1,
         }
 
-    all_params = vars(params) | optim_param | scheduler_param | model_param
+
+    all_params = vars(params) | optim_param | scheduler_param 
     
     run_name, run_id = None, None
 
@@ -111,15 +118,17 @@ if __name__ == '__main__':
     wandb.define_metric('finetune/*', step_metric='ft_step')
 
     def encoder_class():
-        return (GPS(**model_param) 
-                if backend == "GPS" 
-                else GRIT(**model_param))
-
+        return GritTransformer(**model_param)
 
 
 
     print("PM6 pretraining stage...")
     start_time = time.time()
+    train_loader, valid_loader, node_dim, edge_dim, task_dict = dataloader_factory(
+        train_batch_size=params.train_batch_size,
+        cache_dir="data/pm6_processed/",
+        pe_dim=params.model_encoder_pe_dim
+    )  
     print(f"Time taken to build PM6 dataloaders: {time.time() - start_time:.2f} seconds")
 
     scheduler_param['warmup_steps'] = len(train_loader)
@@ -148,6 +157,12 @@ if __name__ == '__main__':
     trainer.train(train_loader, valid_loader, epochs=params.epochs)
     pretrained_model = trainer.model
 
+    # free up GPU memory
+    pretrained_model.to('cpu')
+    del trainer
+    torch.cuda.empty_cache()
+    gc.collect()
+    #
 
 
 
@@ -164,8 +179,6 @@ if __name__ == '__main__':
         datasets_to_use = admet_metrics
 
     df_train, df_valid, df_test, task_dict = load_data(datasets_to_use, params.loss_reduction)
-    scheduler_param['warmup_steps'] = len(train_loader)
-    scheduler_param['T_max'] = len(train_loader) * N_FINETUNE_EPOCHS
 
     if params.smi_leakage_method != 'none':
         df_train = remove_overlap(df_train, df_test)
@@ -174,20 +187,20 @@ if __name__ == '__main__':
 
     label_cols = [c for c in df_train.columns if c != 'smi']
 
-    transform = T.AddRandomWalkPE(walk_length=params.model_encoder_pe_dim, attr_name='pe')
+    partial_dataset = partial(SparseMultitaskDataset, label_cols=label_cols, ksteps=params.model_encoder_pe_dim)
+    train_dataset = partial_dataset(df=df_train)
+    valid_dataset = partial_dataset(df=df_valid)
+    test_dataset  = partial_dataset(df=df_test)
 
-    partial_dataset = partial(SparseMultitaskDataset, label_cols=label_cols, transform=transform)
-    train_dataset = partial_dataset(df_train)
-    valid_dataset = partial_dataset(df_valid)
-    test_dataset  = partial_dataset(df_test)
+    train_loader = DataLoader(train_dataset, batch_size=params.train_batch_size,   shuffle=True)
+    valid_loader = DataLoader(valid_dataset, batch_size=params.train_batch_size*2, shuffle=False)
+    test_loader  = DataLoader(test_dataset,  batch_size=params.train_batch_size*2, shuffle=False)
 
-    partial_loader = partial(DataLoader, pin_memory=True)
-    train_loader = partial_loader(train_dataset, batch_size=params.train_batch_size,   shuffle=True)
-    valid_loader = partial_loader(valid_dataset, batch_size=params.train_batch_size*2, shuffle=False)
-    test_loader  = partial_loader(test_dataset,  batch_size=params.train_batch_size*2, shuffle=False)
-
+    scheduler_param['warmup_steps'] = len(train_loader)
+    scheduler_param['T_max'] = len(train_loader) * N_FINETUNE_EPOCHS
+    
     decoders: nn.ModuleDict = get_decoders(task_dict=task_dict,
-                                           in_dim=params.model_encoder_channels, 
+                                           in_dim=64, 
                                            hidden_dim=params.model_decoder_channels,
                                            num_layers=params.model_decoder_num_layers, 
                                            dropout=params.model_decoder_dropout)
@@ -208,10 +221,14 @@ if __name__ == '__main__':
     trainer.meter.log_wandb = types.MethodType(build_stage_logger('finetune'), trainer.meter)
     trainer.model = copy_encoder_weights(pretrained_model, trainer.model)
     trainer.model = freeze_encoder(trainer.model)
+    
+    # free up GPU memory
+    del pretrained_model
+    gc.collect()
+    torch.cuda.empty_cache()
+    # 
+
     trainer.train(train_loader, valid_loader, epochs=N_FINETUNE_EPOCHS)
-
-
-
 
     print("Evaluating on TDC ADMET")
     evaluator = CheckpointEvaluator(trainer, test_loader, wandb.run.id, task_dict, os.path.join(params.save_path, 'tdc'))
