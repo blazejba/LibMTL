@@ -15,7 +15,9 @@ class _PerformanceMeter(object):
         self.task_num = len(self.task_dict)
         self.task_name = list(self.task_dict.keys())
         
-        self.weight = {task: self.task_dict[task]['weight'] for task in self.task_name}
+        self.higher_is_better_dict = {
+            task: self.task_dict[task]['higher_is_better'] for task in self.task_name
+        }
         self.base_result = base_result
         self.best_result = {'improvement': -1e+2, 'epoch': 0, 'result': 0}
         self.improvement = None
@@ -117,7 +119,7 @@ class _PerformanceMeter(object):
         
     def _update_best_result_by_val(self, new_result, epoch, mode):
         if mode == 'val':
-            improvement = count_improvement(self.base_result, new_result, self.weight)
+            improvement = count_improvement(self.base_result, new_result, self.higher_is_better_dict)
             self.improvement = improvement
             if improvement > self.best_result['improvement']:
                 self.best_result['improvement'] = improvement
@@ -127,7 +129,7 @@ class _PerformanceMeter(object):
                 self.best_result['result'] = new_result
         
     def _update_best_result(self, new_result, epoch):
-        improvement = count_improvement(self.base_result, new_result, self.weight)
+        improvement = count_improvement(self.base_result, new_result, self.higher_is_better_dict)
         self.improvement = improvement
         if improvement > self.best_result['improvement']:
             self.best_result['improvement'] = improvement

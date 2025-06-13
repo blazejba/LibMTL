@@ -93,11 +93,11 @@ def load_data(datasets_to_use: Dict[str, str],
         
         n_classes = pd.unique(df_train[task_name_lower]).shape[0]
         task_dict[task_name_lower] = {
-            'metrics'    : [metric],
-            'n_outputs'  : 1 if metric in ['mae', 'spearman'] else n_classes - 1,
-            'metrics_fn' : metrics_to_metrics_fn[metric](),
-            'loss_fn'    : metrics_to_loss_fn[metric](loss_reduction),
-            'weight'     : [0] if metric in ['mae'] else [1]
+            'metrics': [metric],
+            'n_outputs': 1 if metric in ['mae', 'spearman'] else n_classes - 1,
+            'metrics_fn': metrics_to_metrics_fn[metric](),
+            'loss_fn': metrics_to_loss_fn[metric](loss_reduction),
+            'higher_is_better': metric in ['roc-auc', 'pr-auc']
         }
     return df_train, df_valid, df_test, task_dict
 

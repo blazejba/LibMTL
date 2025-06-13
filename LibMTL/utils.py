@@ -1,6 +1,7 @@
+from typing import Dict
 import random, torch, os
 import numpy as np
-import torch.nn as nn
+
 
 def get_root_dir():
     r"""Return the root path of project."""
@@ -45,7 +46,11 @@ def count_parameters(model):
     print('Trainable Params:', trainable_params)
     print('Non-trainable Params:', non_trainable_params)
         
-def count_improvement(base_result, new_result, weight):
+def count_improvement(
+        base_result, 
+        new_result, 
+        higher_is_better_dict: Dict[str, bool]
+    ) -> float:
     r"""Calculate the improvement between two results as
 
     .. math::
@@ -55,7 +60,7 @@ def count_improvement(base_result, new_result, weight):
     Args:
         base_result (dict): A dictionary of scores of all metrics of all tasks.
         new_result (dict): The same structure with ``base_result``.
-        weight (dict): The same structure with ``base_result`` while each element is binary integer representing whether higher or lower score is better.
+        higher_is_better_dict (dict): 
 
     Returns:
         float: The improvement between ``new_result`` and ``base_result``.
@@ -71,9 +76,16 @@ def count_improvement(base_result, new_result, weight):
     improvement = 0
     count = 0
     for task in list(base_result.keys()):
-        improvement += (((-1)**np.array(weight[task]))*\
-                        (np.array(base_result[task])-np.array(new_result[task]))/\
-                         np.array(base_result[task])).mean()
+        if higher_is_better_dict[task]:
+            improvement += (
+                (np.array(base_result[task]) - np.array(new_result[task]))
+                / np.array(base_result[task])
+            ).mean()
+        else:
+            improvement += (
+                (np.array(new_result[task]) - np.array(base_result[task]))
+                / np.array(base_result[task])
+            ).mean()
         count += 1
     return improvement/count
 
