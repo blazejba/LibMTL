@@ -9,8 +9,10 @@ python -u main_pm6.py \
     --model-backend GRIT \
     --weighting STCH \
     --arch HPS \
-    --epochs 3 \
-    --train-batch-size 256 \
+    --pretrain-epochs 3 \
+    --finetune-epochs 10 \
+    --train-subset-size 0.5 \
+    --train-batch-size 512 \
     --loss-reduction sum \
     --lr 0.0002 \
     --optim adamw \

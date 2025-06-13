@@ -168,10 +168,15 @@ def save_cache(graphs, targets, label_cols, path: str, type: str = "pt"):
 def dataloader_factory(
     train_batch_size: int,
     cache_dir: Optional[str] = None,
-    pe_dim: int = 16
+    pe_dim: int = 16,
+    subset_size: float = 0.5,
 ) -> Tuple[DataLoader, DataLoader, int, int, Dict[str, Dict[str, Any]]]:
 
-    train_ds, val_ds = load_pm6_dataset(cache_dir, pe_dim)
+    train_ds, val_ds = load_pm6_dataset(
+        cache_dir=cache_dir,
+        pe_dim=pe_dim,
+        subset_size=subset_size
+    )
 
     sample_graph, _ = train_ds[0]
     node_dim = sample_graph.x.size(1)
@@ -187,7 +192,7 @@ def dataloader_factory(
             "n_outputs": 1,
             "metrics_fn": SparseL1(),
             "loss_fn": SparseMSELoss("mean"),
-            "weight": [0],
+            "higher_is_better": False,
         }
 
     print("PM6 dataloaders ready.")
@@ -197,7 +202,8 @@ def dataloader_factory(
 
 def load_pm6_dataset(
     cache_dir: Optional[str] = None,
-    pe_dim: int = 16
+    pe_dim: int = 16,
+    subset_size: float = 0.5,
 ) -> Tuple[SparseMultitaskDataset, SparseMultitaskDataset]:
 
     shard_paths = sorted(glob.glob(os.path.join(cache_dir, "shard_*.pt")))
@@ -208,7 +214,7 @@ def load_pm6_dataset(
 
     # Use the **last** shard (after sorting) for validation, the rest for training
     val_cache_file = shard_paths[-1]
-    train_shard_paths = shard_paths[:50]
+    train_shard_paths = shard_paths[:int((len(shard_paths) - 1) * subset_size)]
 
     # Build datasets.  Train dataset receives the *list* of shards so it can
     # stream through them; validation gets a single shard.

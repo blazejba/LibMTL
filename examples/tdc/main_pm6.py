@@ -124,7 +124,8 @@ if __name__ == '__main__':
     train_loader, valid_loader, model_param['node_dim'], model_param['edge_dim'], task_dict = dataloader_factory(
         train_batch_size=params.train_batch_size,
         cache_dir="data/pm6_processed/",
-        pe_dim=params.model_encoder_pe_dim
+        pe_dim=params.model_encoder_pe_dim,
+        subset_size=params.train_subset_size
     )  
     print(f"Time taken to build PM6 dataloaders: {time.time() - start_time:.2f} seconds")
 
@@ -132,7 +133,7 @@ if __name__ == '__main__':
         return GritTransformer(**model_param)
 
     scheduler_param['warmup_steps'] = len(train_loader)
-    scheduler_param['T_max'] = len(train_loader) * params.epochs
+    scheduler_param['T_max'] = len(train_loader) * params.pretrain_epochs
     decoders: nn.ModuleDict = get_decoders(task_dict=task_dict,
                                            in_dim=params.model_encoder_channels, 
                                            hidden_dim=None,
@@ -154,7 +155,7 @@ if __name__ == '__main__':
                       **kwargs)
     
     trainer.meter.log_wandb = types.MethodType(build_stage_logger('pretrain'), trainer.meter)
-    trainer.train(train_loader, valid_loader, epochs=params.epochs)
+    trainer.train(train_loader, valid_loader, epochs=params.pretrain_epochs)
     pretrained_model = trainer.model
 
     # free up GPU memory
@@ -170,8 +171,6 @@ if __name__ == '__main__':
 
 
     print("Starting ADMET fine-tuning...")
-    N_FINETUNE_EPOCHS = 100
-
     if params.more_tasks:       
         from metadata import more_tasks
         datasets_to_use = {**admet_metrics, **more_tasks}
@@ -197,7 +196,7 @@ if __name__ == '__main__':
     test_loader  = DataLoader(test_dataset,  batch_size=params.train_batch_size*2, shuffle=False)
 
     scheduler_param['warmup_steps'] = len(train_loader)
-    scheduler_param['T_max'] = len(train_loader) * N_FINETUNE_EPOCHS
+    scheduler_param['T_max'] = len(train_loader) * params.finetune_epochs
     
     decoders: nn.ModuleDict = get_decoders(task_dict=task_dict,
                                            in_dim=64, 
@@ -228,15 +227,21 @@ if __name__ == '__main__':
     torch.cuda.empty_cache()
     # 
 
-    trainer.train(train_loader, valid_loader, epochs=N_FINETUNE_EPOCHS)
+    trainer.train(train_loader, valid_loader, epochs=params.finetune_epochs)
 
     print("Evaluating on TDC ADMET")
-    evaluator = CheckpointEvaluator(trainer, test_loader, wandb.run.id, task_dict, os.path.join(params.save_path, 'tdc'))
+    evaluator = CheckpointEvaluator(
+        trainer=trainer,
+        test_loader=test_loader,
+        wandb_run_id=wandb.run.id,
+        task_dict=task_dict,
+        save_path=os.path.join(params.save_path, 'tdc')
+    )
 
     if params.save_path is not None:
         for ckpt_selection_method in params.eval_methods:
             print(f'Evaluating with {ckpt_selection_method} method')
-            evaluator.evaluate_by_method(ckpt_selection_method, N_FINETUNE_EPOCHS)
+            evaluator.evaluate_by_method(ckpt_selection_method, params.finetune_epochs)
     else:
         trainer.test(test_loader, mode='test', reinit=False)
         results = trainer.meter.results.copy()

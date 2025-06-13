@@ -25,7 +25,9 @@ def parse_args(parser):
     parser.add_argument('--model-decoder-num-layers', default=2, type=int)
     parser.add_argument('--model-decoder-dropout', default=0.1, type=float)
     # training
-    parser.add_argument('--epochs', default=10, type=int)
+    parser.add_argument('--pretrain-epochs', default=3, type=int)
+    parser.add_argument('--finetune-epochs', default=10, type=int)
+    parser.add_argument('--train-subset-size', default=0.5, type=float)
     parser.add_argument('--lr-factor', default=0.9, type=float)
     parser.add_argument('--patience', default=5, type=int)
     parser.add_argument('--train-batch-size', default=512, type=int)
