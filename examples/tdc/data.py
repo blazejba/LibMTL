@@ -1,21 +1,17 @@
 import os
 import time
 import contextlib
-import numpy as np
+import threading
 import pandas as pd
 import pickle as pkl
 from tqdm.auto import tqdm
-from typing import Dict, Any, Optional, Callable, List
+from typing import Dict, Any, List
 
 import torch
-import torch.nn.functional as F
-from torch_sparse import SparseTensor
-from torch_geometric.data import Data, InMemoryDataset
+from torch_geometric.data import InMemoryDataset
 
 from tdc.single_pred import ADME, Tox
 from tdc.metadata import toxicity_dataset_names, adme_dataset_names
-
-from ogb.utils import smiles2graph
 
 try:
     from rdkit import RDLogger
@@ -108,12 +104,13 @@ def load_data(datasets_to_use: Dict[str, str],
 
 class SparseMultitaskDataset(InMemoryDataset):
 
-    def __init__(self,
-                 df: pd.DataFrame | None = None,
-                 label_cols: list[str] | None = None,
-                 load_from: str | Dict | None = None,
-                 shard_paths: List[str] | None = None,
-                 ksteps: int = 20):
+    def __init__(
+            self,
+            df: pd.DataFrame | None = None,
+            label_cols: list[str] | None = None,
+            load_from: str | Dict | None = None,
+            shard_paths: List[str] | None = None,
+            ksteps: int = 20):
         
         super().__init__()
 
@@ -122,6 +119,10 @@ class SparseMultitaskDataset(InMemoryDataset):
         self._reload_flag: bool = False
         self._samples_seen: int = 0
         self.ksteps = ksteps
+
+        # background-loading helpers
+        self._next_shard_blob: Dict[str, Any] | None = None
+        self._preload_thread: threading.Thread | None = None
 
         # If shard paths are provided, load the first shard and exit
         if self.shard_paths:
@@ -137,7 +138,8 @@ class SparseMultitaskDataset(InMemoryDataset):
         assert label_cols is not None, "label_cols must be provided if load_from is not provided"
 
         self.label_cols = label_cols
-        build_fn = self._build_single
+        from examples.tdc.pm6_utils import build_single_graph
+        build_fn = lambda row: build_single_graph(row, self.label_cols, self.ksteps)
 
         self.graphs, self.targets = [], []
         iterator = df.iterrows()
@@ -146,6 +148,37 @@ class SparseMultitaskDataset(InMemoryDataset):
             g, t = build_fn(row)
             self.graphs.append(g)
             self.targets.append(t)
+
+    def _load_shard_blob(self, path: str) -> Dict[str, Any]:
+        "Load a shard file (.pt or .pkl) into memory and return the raw blob."
+        if path.endswith(".pkl"):
+            with open(path, "rb") as f:
+                return pkl.load(f)
+        elif path.endswith(".pt"):
+            return torch.load(path, map_location="cpu")
+        raise ValueError(f"Unsupported shard extension in {path}")
+    
+    def _apply_blob(self, blob: Dict[str, Any]) -> None:
+        "Replace in-memory data with the contents of *blob*."
+        self.graphs = blob["graphs"]
+        self.targets = blob["targets"]
+        self.label_cols = blob["label_cols"]
+        if self.transform is not None:
+            self.graphs = [self.transform(g) for g in self.graphs]
+
+    def _preload_next(self, next_idx: int) -> None:
+        "Background thread target to populate *self._next_shard_blob*."
+        blob = self._load_shard_blob(self.shard_paths[next_idx])
+        self._next_shard_blob = blob  # atomic replacement is fine for Python objects
+
+    def _start_preload(self, next_idx: int) -> None:
+        "Spawn a daemon thread that preloads the shard with index *next_idx*."
+        if self._preload_thread and self._preload_thread.is_alive():
+            return  # already preloading
+        self._preload_thread = threading.Thread(
+            target=self._preload_next, args=(next_idx,), daemon=True
+        )
+        self._preload_thread.start()
 
     def load_from_cache(self, load_from: str | Dict) -> None:
 
@@ -181,38 +214,25 @@ class SparseMultitaskDataset(InMemoryDataset):
             raise ValueError("No shard paths provided for sharded dataset.")
         shard_idx = shard_idx % len(self.shard_paths)
         self.load_from_cache(self.shard_paths[shard_idx])
+        # Kick off background preload of the *following* shard
+        self._start_preload((shard_idx + 1) % len(self.shard_paths))
         self.current_shard_idx = shard_idx
     
-    def save_cache(self, path: str, type: str = "pkl") -> None:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        if type == "pkl":
-            with open(path, "wb") as f:
-                pkl.dump(
-                    {
-                        "graphs": self.graphs,
-                        "targets": self.targets,
-                        "label_cols": self.label_cols
-                    }, f)
-        elif type == "pt":
-            torch.save(
-                {
-                    "graphs": self.graphs,
-                    "targets": self.targets,
-                    "label_cols": self.label_cols
-                }, path)
-        else: 
-            raise ValueError(f"Unsupported type: {type}")
-            
     def __len__(self) -> int:
         # If the previous epoch exhausted this shard, load the next one
         if self.shard_paths and self._reload_flag:
-            print(f"Loading next shard {self.current_shard_idx + 1}")
-            start_time = time.time()
-            next_idx = (self.current_shard_idx + 1) % len(self.shard_paths)
-            self.load_shard(next_idx)
+            # Ensure preload is finished
+            if self._preload_thread:
+                self._preload_thread.join()
+            # Swap data
+            if self._next_shard_blob is not None:
+                self._apply_blob(self._next_shard_blob)
+                self.current_shard_idx = (self.current_shard_idx + 1) % len(self.shard_paths)
+                # Start preload of the shard after the one we just swapped in
+                self._start_preload((self.current_shard_idx + 1) % len(self.shard_paths))
+                self._next_shard_blob = None
             self._samples_seen = 0
             self._reload_flag = False
-            print(f"Loaded shard {next_idx} in {time.time() - start_time:.2f} seconds")
         return len(self.graphs)
 
     def __getitem__(self, idx: int):
@@ -226,112 +246,3 @@ class SparseMultitaskDataset(InMemoryDataset):
                 self._reload_flag = True
 
         return graph, {task: target[i] for i, task in enumerate(self.label_cols)}
-
-    def _build_single(self, row):
-        smi = row.smi if hasattr(row, 'smi') else row['smi']
-
-        dg = smiles2graph(smi)
-        for k, v in dg.items():
-            if isinstance(v, np.ndarray):
-                dg[k] = torch.from_numpy(v)
-
-        x = dg["node_feat"].float()
-        node_feat_dim = x.size(1)
-        edge_index = dg["edge_index"].long() # [2, E]
-        raw_edge_feat = dg["edge_feat"] # [E, C_edge]
-
-        edge_type_idx = raw_edge_feat.argmax(dim=1) # [E]
-        num_edge_types = raw_edge_feat.size(1)
-        edge_one_hot = F.one_hot(edge_type_idx,
-                                 num_classes=num_edge_types).float() # [E,C_edge]
-
-        if edge_one_hot.size(1) < node_feat_dim:
-            pad = node_feat_dim - edge_one_hot.size(1)
-            edge_one_hot = torch.cat(
-                [edge_one_hot, torch.zeros(edge_one_hot.size(0), pad)], dim=1
-            )
-        elif edge_one_hot.size(1) > node_feat_dim:
-            edge_one_hot = edge_one_hot[:, :node_feat_dim]
-
-        edge_attr = edge_one_hot # [E, F_node]
-
-        data = Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
-
-        data.edge_weight = torch.ones(
-            edge_index.size(1),
-            dtype=torch.float,
-            device=edge_index.device
-        )
-
-        data = add_full_rrwp(data, walk_length=self.ksteps)
-
-        if hasattr(row, '_fields'):
-            target_vals = [getattr(row, col) for col in self.label_cols]
-        else:
-            target_vals = row[self.label_cols].fillna(np.nan).values
-
-        target = torch.tensor(target_vals, dtype=torch.float)
-
-        return data, target
-
-
-@torch.no_grad()
-def add_full_rrwp(data,
-                  walk_length=8,
-                  attr_name_abs="rrwp",
-                  attr_name_rel="rrwp",
-                  add_identity=True):
-    num_nodes = data.num_nodes
-    edge_index, edge_weight = data.edge_index, data.edge_weight
-
-    adj = SparseTensor.from_edge_index(edge_index, edge_weight,
-                                       sparse_sizes=(num_nodes, num_nodes))
-
-    deg = adj.sum(dim=1)
-    deg_inv = 1.0 / adj.sum(dim=1)
-    deg_inv[deg_inv == float('inf')] = 0
-    adj = adj * deg_inv.view(-1, 1)
-    adj = adj.to_dense()
-
-    pe_list = []
-    i = 0
-    if add_identity:
-        pe_list.append(torch.eye(num_nodes, dtype=torch.float))
-        i = i + 1
-
-    out = adj
-    pe_list.append(adj)
-
-    if walk_length > 2:
-        for j in range(i + 1, walk_length):
-            out = out @ adj
-            pe_list.append(out)
-
-    pe = torch.stack(pe_list, dim=-1)  # n x n x k
-    abs_pe = pe.diagonal().transpose(0, 1)  # n x k
-
-    rel_pe = SparseTensor.from_dense(pe, has_value=True)
-    rel_pe_row, rel_pe_col, rel_pe_val = rel_pe.coo()
-    rel_pe_idx = torch.stack([rel_pe_col, rel_pe_row], dim=0)
-
-    data = add_node_attr(data, abs_pe, attr_name=attr_name_abs)
-    data = add_node_attr(data, rel_pe_idx, attr_name=f"{attr_name_rel}_index")
-    data = add_node_attr(data, rel_pe_val, attr_name=f"{attr_name_rel}_val")
-    data.log_deg = torch.log(deg + 1)
-    data.deg = deg.type(torch.long)
-
-    return data
-
-
-def add_node_attr(data: Data, value: Any,
-                  attr_name: Optional[str] = None) -> Data:
-    if attr_name is None:
-        if 'x' in data:
-            x = data.x.view(-1, 1) if data.x.dim() == 1 else data.x
-            data.x = torch.cat([x, value.to(x.device, x.dtype)], dim=-1)
-        else:
-            data.x = value
-    else:
-        data[attr_name] = value
-
-    return data

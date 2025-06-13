@@ -136,7 +136,7 @@ class Trainer(nn.Module):
     
     def _prepare_model(self, weighting, architecture, encoder_class, decoders):
 
-        weighting_class = weighting_method.__dict__['EW' if self.weighting in self.bilevel_methods else weighting] 
+        weighting_class = weighting_method.__dict__[weighting] 
         architecture_class = architecture_method.__dict__[architecture]
         
         class MTLmodel(architecture_class, weighting_class):

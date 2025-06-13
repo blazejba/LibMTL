@@ -19,6 +19,7 @@ def parse_args(parser):
     parser.add_argument('--model-encoder-pe-dim', default=20, type=int)
     parser.add_argument('--model-encoder-num-layers', default=3, type=int)
     parser.add_argument('--model-encoder-dropout', default=0.5, type=float)
+    parser.add_argument('--model-encoder-num-heads', default=4, type=int)
     ## decoder
     parser.add_argument('--model-decoder-channels', default=64, type=int)
     parser.add_argument('--model-decoder-num-layers', default=2, type=int)
@@ -31,7 +32,8 @@ def parse_args(parser):
     parser.add_argument('--more-tasks', default=False, type=str2bool)
     parser.add_argument('--smi-leakage-method', default='none', choices=['none', 'test+valid', 'test'])
     # evaluation
-    parser.add_argument('--eval-methods', default=['improvement', 'pps', 'last', 'independent'], nargs='+', type=str)
+    # available: ['improvement', 'pps', 'last', 'independent']
+    parser.add_argument('--eval-methods', default=['last'], nargs='+', type=str)
     # misc
     parser.add_argument('--load-path', default=None, type=str)
     parser.add_argument('--wandb', action='store_true', help='use wandb')

@@ -117,19 +117,19 @@ if __name__ == '__main__':
     wandb.define_metric('ft_step')
     wandb.define_metric('finetune/*', step_metric='ft_step')
 
-    def encoder_class():
-        return GritTransformer(**model_param)
-
 
 
     print("PM6 pretraining stage...")
     start_time = time.time()
-    train_loader, valid_loader, node_dim, edge_dim, task_dict = dataloader_factory(
+    train_loader, valid_loader, model_param['node_dim'], model_param['edge_dim'], task_dict = dataloader_factory(
         train_batch_size=params.train_batch_size,
         cache_dir="data/pm6_processed/",
         pe_dim=params.model_encoder_pe_dim
     )  
     print(f"Time taken to build PM6 dataloaders: {time.time() - start_time:.2f} seconds")
+
+    def encoder_class():
+        return GritTransformer(**model_param)
 
     scheduler_param['warmup_steps'] = len(train_loader)
     scheduler_param['T_max'] = len(train_loader) * params.epochs

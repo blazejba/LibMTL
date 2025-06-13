@@ -283,6 +283,7 @@ class RRWPLinearNodeEncoder(torch.nn.Module):
 
     def forward(self, batch):
         rrwp = batch[f"{self.name}"]
+        rrwp = rrwp.to(self.fc.weight.dtype)
         rrwp = self.fc(rrwp)
 
         if "x" in batch:
@@ -314,6 +315,7 @@ class RRWPLinearEdgeEncoder(torch.nn.Module):
     def forward(self, batch):
         rrwp_idx = batch.rrwp_index
         rrwp_val = batch.rrwp_val
+        rrwp_val = rrwp_val.to(self.fc.weight.dtype)
         edge_index = batch.edge_index
         edge_attr = batch.edge_attr
         rrwp_val = self.fc(rrwp_val)
